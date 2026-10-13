@@ -250,3 +250,31 @@ def test_clone_never_exposes_token_and_disables_symlinks(private_key, tmp_path, 
     assert config["core.symlinks"] == "false"
     assert config["core.hooksPath"] == "/dev/null"
     assert seen[2][0][:4] == ["git", "fetch", "-q", "--depth"]
+
+
+# --- Landing y lista de espera -------------------------------------------------------------
+
+def test_landing_is_served_with_security_headers(env):
+    _, _, client = env
+    r = client.get("/")
+    assert r.status_code == 200
+    assert r.text.startswith("<!doctype html>") and "window.ATALAYA_LIVE = true" in r.text
+    assert "<title>Atalaya</title>" in r.text
+    assert "frame-ancestors 'none'" in r.headers["content-security-policy"]
+    assert r.headers["x-content-type-options"] == "nosniff"
+
+
+def test_waitlist_registers_validates_and_dedupes(env):
+    _, _, client = env
+    assert client.post("/api/waitlist", json={"email": "Ana@Empresa.com", "company": "ACME"}).status_code == 201
+    assert client.post("/api/waitlist", json={"email": "ana@empresa.com"}).status_code == 200
+    assert client.post("/api/waitlist", json={"email": "no-es-un-email"}).status_code == 422
+    assert client.get("/api/waitlist").status_code == 401
+    rows = client.get("/api/waitlist", headers={"Authorization": "Bearer admin-token"}).json()
+    assert [(r["email"], r["company"]) for r in rows] == [("ana@empresa.com", "ACME")]
+
+
+def test_waitlist_is_rate_limited(env):
+    _, _, client = env
+    codes = [client.post("/api/waitlist", json={"email": f"u{i}@x.com"}).status_code for i in range(7)]
+    assert codes[:5] == [201] * 5 and codes[5:] == [429, 429]

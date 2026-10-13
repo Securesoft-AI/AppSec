@@ -83,6 +83,18 @@ class Scan(Base):
     repository: Mapped[Repository] = relationship(back_populates="scans")
 
 
+class WaitlistEntry(Base):
+    """Interesados que dejan su email en la landing."""
+
+    __tablename__ = "waitlist"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    email: Mapped[str] = mapped_column(String(320), unique=True, index=True)
+    company: Mapped[str] = mapped_column(String(200), default="")
+    lang: Mapped[str] = mapped_column(String(5), default="es")
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class Database:
     def __init__(self, url: str):
         kwargs = {"connect_args": {"check_same_thread": False}} if url.startswith("sqlite") else {"pool_pre_ping": True}
