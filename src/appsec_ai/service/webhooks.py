@@ -9,7 +9,7 @@ import logging
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from appsec_ai.service.db import Installation, Repository, Scan, ScanKind, ScanStatus
+from appsec_ai.service.db import FixRequest, Installation, Repository, Scan, ScanKind, ScanStatus
 
 log = logging.getLogger("appsec_ai.webhooks")
 
@@ -131,15 +131,38 @@ def on_push(s: Session, p: dict) -> dict:
     return {"scan": scan.id if scan else None}
 
 
+FIX_ACTION = "open_fix_pr"
+
+
 def on_check_run(s: Session, p: dict) -> dict:
-    """El usuario pulsa "Re-run" en GitHub: se vuelve a encolar el escaneo."""
-    if p.get("action") != "rerequested":
-        return {"ignored": f"check_run.{p.get('action')}"}
+    """"Re-run" vuelve a encolar el escaneo; el botón "Abrir PR con fixes" encola una corrección."""
+    action = p.get("action")
+    if action not in ("rerequested", "requested_action"):
+        return {"ignored": f"check_run.{action}"}
     scan = s.scalars(select(Scan).where(Scan.check_run_id == p["check_run"]["id"])).first()
     if scan is None:
         return {"ignored": "check desconocido"}
+    # El check_run del webhook debe ser del mismo repositorio que el escaneo.
+    if scan.repository_id != (p.get("repository") or {}).get("id"):
+        return {"ignored": "repositorio distinto"}
+    if action == "requested_action":
+        if (p.get("requested_action") or {}).get("identifier") != FIX_ACTION:
+            return {"ignored": "acción desconocida"}
+        return {"fix": request_fix(s, scan, (p.get("sender") or {}).get("login", "")).id}
     scan.status, scan.attempts, scan.error, scan.check_run_id = ScanStatus.QUEUED.value, 0, "", None
     return {"scan": scan.id}
+
+
+def request_fix(s: Session, scan: Scan, requested_by: str = "") -> FixRequest:
+    """Encola la corrección de un escaneo. Idempotente; una petición fallida se puede repetir."""
+    fix = s.scalars(select(FixRequest).where(FixRequest.scan_id == scan.id)).first()
+    if fix is None:
+        fix = FixRequest(scan_id=scan.id, requested_by=requested_by)
+        s.add(fix)
+        s.flush()
+    elif fix.status == ScanStatus.FAILED.value:
+        fix.status, fix.attempts, fix.error = ScanStatus.QUEUED.value, 0, ""
+    return fix
 
 
 HANDLERS = {

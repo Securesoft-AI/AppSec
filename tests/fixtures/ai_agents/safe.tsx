@@ -1,10 +1,12 @@
 // Uso SEGURO: no debe generar hallazgos.
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
+import { Ratelimit } from "@upstash/ratelimit";
 
 const anthropic = new Anthropic();
 const openai = new OpenAI();
 const SYSTEM = "Eres un asistente de soporte. Responde solo sobre nuestros productos.";
+declare const ratelimit: Ratelimit;
 
 export async function POST(req: Request) {
   const { question } = await req.json();

@@ -6,7 +6,7 @@ from pathlib import Path
 from appsec_ai.engines.ai_security import AISecurityEngine
 from appsec_ai.engines.base import Engine, EngineError
 from appsec_ai.engines.opensource import CheckovEngine, GitleaksEngine, OpengrepEngine, OSVEngine
-from appsec_ai.models import EngineRun, Finding, ScanResult
+from appsec_ai.models import Category, EngineRun, Finding, ScanResult
 from appsec_ai.triage import Triager
 
 ALL_ENGINES = {
@@ -43,14 +43,19 @@ def scan(target: Path, engines: list[str] | None = None, triager: Triager | None
         result.ai_inventory = ai_engine.inventory
 
     if triager:
-        warnings = triager.triage(target, result.findings)
-        result.ai_summary = triager.summarize(result.ai_inventory, result.findings)
-        result.llm_usage = dict(triager.usage)
-        for w in warnings:
-            result.engines.append(EngineRun(engine="triage", status="error", detail=w))
+        apply_triage(target, result, triager)
 
     result.findings.sort(key=lambda f: (-f.effective_severity.rank, f.file, f.line))
     return result
+
+
+def apply_triage(target: Path, result: ScanResult, triager: Triager):
+    """Triage y resumen ejecutivo. Los errores del LLM quedan como avisos, nunca abortan el escaneo."""
+    triager.triage(target, result.findings)
+    result.ai_summary = triager.summarize(result.ai_inventory, result.findings)
+    result.llm_usage = dict(triager.usage)
+    for w in triager.warnings:
+        result.engines.append(EngineRun(engine="triage", status="error", detail=w))
 
 
 SUPPRESSION = re.compile(r"(?i)(\bnosec\b|\bnosemgrep\b|appsec-ai:\s*ignore)")
@@ -99,7 +104,8 @@ def dedupe(findings: list[Finding]) -> list[Finding]:
         return {CWE_FAMILY.get(x, x) for x in f.frameworks if x.startswith("CWE-")}
 
     def priority(f: Finding) -> tuple[int, int]:
-        return (1 if f.engine == "ai-security" else 0, f.severity.rank)
+        # El hallazgo de IA es el más específico (dice que el origen es el modelo), venga del motor que venga.
+        return (1 if f.category == Category.AI else 0, f.severity.rank)
 
     out: list[Finding] = []
     for f in sorted(unique, key=priority, reverse=True):

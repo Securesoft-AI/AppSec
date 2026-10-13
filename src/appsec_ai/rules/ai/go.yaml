@@ -1,0 +1,163 @@
+# Seguridad de IA para Go: go-openai, openai-go, anthropic-sdk-go, langchaingo y Gemini.
+# Los ids coinciden con los del motor ai-security (Python y JS/TS) para compartir OWASP, CWE y MITRE ATLAS.
+rules:
+  - id: llm05-llm-output-to-sql
+    languages: [go]
+    severity: ERROR
+    message: >-
+      La consulta SQL sale de la respuesta del modelo. Con prompt injection un atacante puede leer o borrar
+      datos. Usa consultas parametrizadas, una lista blanca de operaciones y un usuario de BD de solo lectura.
+    metadata: {category: ai, title: Salida del LLM ejecutada como SQL}
+    mode: taint
+    pattern-sources: &llm-output
+      - pattern-either:
+          - pattern: $C.CreateChatCompletion(...)       # sashabaranov/go-openai
+          - pattern: $C.CreateCompletion(...)
+          - pattern: $C.Chat.Completions.New(...)       # openai/openai-go
+          - pattern: $C.Responses.New(...)
+          - pattern: $C.Messages.New(...)               # anthropics/anthropic-sdk-go
+          - pattern: llms.GenerateFromSinglePrompt(...) # tmc/langchaingo
+          - pattern: $L.GenerateContent(...)            # langchaingo y Gemini
+          - pattern: $M.Models.GenerateContent(...)     # google.golang.org/genai
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern: $DB.$M($Q, ...)
+                  - metavariable-regex:
+                      metavariable: $M
+                      regex: ^(Query|QueryRow|Exec|Prepare|Raw|MustExec|Queryx|QueryRowx)$
+              - patterns:
+                  # sqlx: db.Get(&dest, query, args...) y db.Select(&dest, query, args...).
+                  - pattern: $DB.$M($DEST, $Q, ...)
+                  - metavariable-regex:
+                      metavariable: $M
+                      regex: ^(Get|Select)$
+              - patterns:
+                  - pattern: $DB.$M($CTX, $Q, ...)
+                  - metavariable-regex:
+                      metavariable: $M
+                      regex: ^(QueryContext|QueryRowContext|ExecContext|PrepareContext|SelectContext|GetContext)$
+          - focus-metavariable: $Q
+
+  - id: llm05-llm-output-to-code-exec
+    languages: [go]
+    severity: ERROR
+    message: >-
+      La respuesta del modelo se ejecuta como comando. Con prompt injection esto es ejecución remota de código.
+      Nunca ejecutes salida del modelo; si es imprescindible, usa un sandbox aislado.
+    metadata: {category: ai, title: Salida del LLM ejecutada como código o comando}
+    mode: taint
+    pattern-sources: *llm-output
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: exec.Command(..., $X, ...)
+              - pattern: exec.CommandContext($CTX, ..., $X, ...)
+              - pattern: syscall.Exec(..., $X, ...)
+          - focus-metavariable: $X
+
+  - id: llm05-llm-output-to-request
+    languages: [go]
+    severity: ERROR
+    message: >-
+      El modelo decide a qué URL se conecta el servidor (SSRF): puede alcanzar servicios internos o exfiltrar
+      datos. Valida el destino contra una lista blanca.
+    metadata: {category: ai, title: Salida del LLM usada como destino de una petición HTTP (SSRF)}
+    mode: taint
+    pattern-sources: *llm-output
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: http.Get($U)
+              - pattern: http.Head($U)
+              - pattern: http.Post($U, ...)
+              - pattern: http.PostForm($U, ...)
+              - pattern: http.NewRequest($METHOD, $U, ...)
+              - pattern: http.NewRequestWithContext($CTX, $METHOD, $U, ...)
+          - focus-metavariable: $U
+
+  - id: llm05-llm-output-to-filesystem
+    languages: [go]
+    severity: ERROR
+    message: El modelo controla rutas de ficheros (path traversal, lectura o borrado de ficheros).
+    metadata: {category: ai, title: Salida del LLM usada como ruta de fichero}
+    mode: taint
+    pattern-sources: *llm-output
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: os.Open($P)
+              - pattern: os.OpenFile($P, ...)
+              - pattern: os.ReadFile($P)
+              - pattern: os.WriteFile($P, ...)
+              - pattern: os.Create($P)
+              - pattern: os.Remove($P)
+              - pattern: os.RemoveAll($P)
+              - pattern: ioutil.ReadFile($P)
+              - pattern: ioutil.WriteFile($P, ...)
+          - focus-metavariable: $P
+
+  - id: llm05-llm-output-to-html
+    languages: [go]
+    severity: WARNING
+    message: >-
+      La respuesta del modelo se marca como HTML o JavaScript seguro y html/template deja de escaparla. Un
+      atacante puede hacer que el modelo devuelva JavaScript (XSS). Pásala como string normal.
+    metadata: {category: ai, title: Salida del LLM insertada en HTML sin escapar (XSS)}
+    mode: taint
+    pattern-sources: *llm-output
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: template.HTML($X)
+              - pattern: template.JS($X)
+              - pattern: template.HTMLAttr($X)
+          - focus-metavariable: $X
+
+  - id: llm01-untrusted-input-in-system-prompt
+    languages: [go]
+    severity: WARNING
+    message: >-
+      Datos de la petición HTTP se insertan en las instrucciones de sistema, lo que permite sobrescribir el
+      comportamiento del modelo. Mantén el prompt de sistema constante y pasa la entrada como mensaje de usuario.
+    metadata: {category: ai, title: Entrada no confiable dentro del prompt de sistema}
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          - pattern: '($R : *http.Request).URL.Query().Get(...)'
+          - pattern: '($R : *http.Request).FormValue(...)'
+          - pattern: '($R : *http.Request).PostFormValue(...)'
+          - pattern: '($R : *http.Request).Header.Get(...)'
+          - pattern: '($C : *gin.Context).Query(...)'
+          - pattern: '($C : *gin.Context).DefaultQuery(...)'
+          - pattern: '($C : *gin.Context).PostForm(...)'
+          - pattern: '($C : *gin.Context).Param(...)'
+          - pattern: '($C : echo.Context).QueryParam(...)'
+          - pattern: '($C : echo.Context).FormValue(...)'
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: 'openai.ChatCompletionMessage{Role: openai.ChatMessageRoleSystem, Content: $S}'
+              - pattern: '{Role: openai.ChatMessageRoleSystem, Content: $S}'
+              - pattern: openai.SystemMessage($S)
+              - pattern: llms.TextParts(llms.ChatMessageTypeSystem, $S)
+          - focus-metavariable: $S
+
+  - id: llm07-secret-in-system-prompt
+    languages: [go]
+    severity: ERROR
+    message: >-
+      El prompt de sistema contiene lo que parece una credencial. Los prompts de sistema se pueden extraer con
+      prompt injection: nunca incluyas secretos en ellos.
+    metadata: {category: ai, title: Secreto incluido en el prompt de sistema}
+    patterns:
+      - pattern-either:
+          - pattern: 'openai.ChatCompletionMessage{Role: openai.ChatMessageRoleSystem, Content: "$S"}'
+          - pattern: '{Role: openai.ChatMessageRoleSystem, Content: "$S"}'
+          - pattern: openai.SystemMessage("$S")
+          - pattern: llms.TextParts(llms.ChatMessageTypeSystem, "$S")
+      - metavariable-regex:
+          metavariable: $S
+          # metavariable-regex va anclado al inicio: de ahí el .*? inicial.
+          regex: (?is).*?((api[_ -]?key|password|passwd|contraseña|clave|secret|token|credential|credencial)\w*[^\n.:=]{0,40}?(\bis|\bes|:|=)\s*["']?(?=[A-Za-z0-9_\-+/]*\d)[A-Za-z0-9_\-+/]{8,}|\bsk-[A-Za-z0-9_\-]{16,}|\b[sr]k_(live|test)_[A-Za-z0-9]{16,}|\bAKIA[0-9A-Z]{16}\b)

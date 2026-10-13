@@ -24,11 +24,20 @@ class Settings:
     ai_effort: str = field(default_factory=lambda: _env("AI_EFFORT", "medium"))
     ai_max_requests_pr: int = field(default_factory=lambda: int(_env("AI_MAX_REQUESTS_PR", "15")))
     ai_max_requests_full: int = field(default_factory=lambda: int(_env("AI_MAX_REQUESTS_FULL", "60")))
+    # Caché del triage entre escaneos (una subcarpeta por repositorio). Vacío = sin caché.
+    ai_cache_dir: str = field(default_factory=lambda: _env("AI_CACHE_DIR"))
     language: str = field(default_factory=lambda: _env("REPORT_LANGUAGE", "es"))
     # Límites del worker.
     max_repo_mb: int = field(default_factory=lambda: int(_env("MAX_REPO_MB", "500")))
     clone_timeout: int = field(default_factory=lambda: int(_env("CLONE_TIMEOUT", "300")))
     workdir: str = field(default_factory=lambda: _env("WORKDIR", ""))
+    # Aislamiento del escaneo: "subprocess" (por defecto) o "none" (solo para desarrollo).
+    scan_sandbox: str = field(default_factory=lambda: _env("SCAN_SANDBOX", "subprocess"))
+    # Envoltorio opcional del subproceso, p. ej. "bwrap --unshare-all --share-net ... --bind {src} {src}".
+    scan_sandbox_cmd: str = field(default_factory=lambda: _env("SCAN_SANDBOX_CMD"))
+    scan_timeout: int = field(default_factory=lambda: int(_env("SCAN_TIMEOUT", "900")))
+    # Cifrado en reposo de resultados y caché (claves Fernet separadas por comas; la primera cifra).
+    data_encryption_key: str = field(default_factory=lambda: _env("DATA_ENCRYPTION_KEY"))
     # Severidad a partir de la cual el check del PR falla.
     fail_on: str = field(default_factory=lambda: _env("FAIL_ON", "high"))
 

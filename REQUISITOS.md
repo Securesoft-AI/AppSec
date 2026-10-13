@@ -70,12 +70,13 @@ Leyenda: ✅ hecho · 🔜 MVP · ⏭ posterior
   - LLM05: salida del LLM hacia `eval`/shell, SQL, peticiones HTTP (SSRF), sistema de ficheros, HTML (XSS).
   - LLM05: la salida del LLM elige qué función se ejecuta (`getattr`, `handlers[x]()`).
   - LLM06: herramientas de agentes y de servidores MCP con acciones peligrosas (shell, SQL dinámico o de escritura, borrado, pagos, emails, HTTP de escritura); servidores MCP por HTTP sin autenticación.
-  - LLM07: secretos en el prompt de sistema.
+  - LLM07: secretos en el prompt de sistema; control de acceso delegado en el prompt.
+  - LLM08: búsquedas RAG con la pregunta del usuario sin filtro de acceso por usuario o tenant.
   - LLM10: llamadas sin límite de tokens; agentes sin límite de iteraciones.
 - ✅ RF‑2.3 Análisis de JS/TS con AST real (tree‑sitter).
 - ✅ RF‑2.4 Validado contra código real: LangChain Community, LlamaIndex Core y CrewAI (más de 2.000 ficheros) dan 10 hallazgos, todos revisados y justificados.
-- 🔜 RF‑2.4b Más reglas: LLM08 (RAG sin control de acceso por documento), lógica de autorización delegada en el prompt, límites de frecuencia por usuario, Java y Go para IA (Spring AI, LangChain4j, SDK de Go).
-- 🔜 RF‑2.5 Mapeo a MITRE ATLAS, NIST AI RMF, ISO 42001 y EU AI Act en el informe.
+- ✅ RF‑2.4b Más reglas: LLM08 (RAG sin filtro de acceso), autorización delegada en el prompt, endpoints sin rate limiting, y Java y Go para IA (Spring AI, LangChain4j, SDK de OpenAI y Anthropic, go-openai, openai-go, anthropic-sdk-go, langchaingo). Validado sin falsos positivos sobre langchain4j-examples, spring-ai-examples y langchaingo (1.086 ficheros, 229 llamadas al LLM reconocidas).
+- ✅ RF‑2.5 Mapeo a MITRE ATLAS (IDs comprobados contra ATLAS v5.6.0), NIST AI RMF y su perfil de IA generativa, ISO 42001 (anexo A) y EU AI Act en el informe. Orientativo; conviene que lo revise un especialista en cumplimiento antes de venderlo como tal.
 - ⏭ RF‑2.6 Modelo de amenazas generado por sistema de IA (flujo de datos, activos, caminos de ataque).
 - ⏭ RF‑2.7 Red teaming dinámico: pruebas automáticas de prompt injection/jailbreak contra el endpoint desplegado.
 
@@ -86,7 +87,7 @@ Leyenda: ✅ hecho · 🔜 MVP · ⏭ posterior
 - ✅ RF‑3.4 Caché local por huella: reescanear sin cambios no gasta tokens.
 - ✅ RF‑3.5 Presupuesto máximo de peticiones por escaneo; los ficheros más graves se analizan primero.
 - ✅ RF‑3.6 Resumen ejecutivo de seguridad de IA para el CTO.
-- 🔜 RF‑3.7 Botón "Abrir PR con la corrección".
+- ✅ RF‑3.7 Botón "Abrir PR con fixes" en el check de GitHub (y `POST /api/scans/{id}/fix-pr`): Claude propone ediciones exactas, se validan (texto único y sintaxis) y se abre un PR para revisión humana. Requiere permiso `contents: write`.
 - 🔜 RF‑3.8 El usuario marca "útil / no útil" en cada hallazgo; ese feedback alimenta el conjunto de evaluación.
 
 ### M4. Plataforma SaaS

@@ -29,6 +29,7 @@ def test_detects_llm_risks_in_python():
         ("app.py", "llm01-prompt-concatenation"),        # f"... {question}"
         ("app.py", "llm01-indirect-prompt-injection"),   # contenido de una URL
         ("app.py", "llm02-llm-io-logged"),               # print(answer)
+        ("app.py", "llm10-no-rate-limit"),               # /ask llama al LLM y no hay rate limiting
     }
 
 
@@ -39,6 +40,7 @@ def test_detects_llm_risks_in_typescript():
         "llm05-llm-output-to-html",
         "llm01-untrusted-input-in-system-prompt",
         "llm10-no-output-limit",
+        "llm10-no-rate-limit",
     }
 
 
@@ -70,6 +72,46 @@ def test_agents_mcp_and_new_rules():
     }
 
 
+def test_rag_access_control_and_authorization_in_prompt():
+    assert ai_rules(Path(__file__).parent / "fixtures" / "rag") == {
+        ("rag.py", 19, "llm08-rag-without-access-filter"),   # similarity_search sin filter
+        ("rag.py", 20, "llm08-rag-without-access-filter"),   # as_retriever() sin filtro + invoke
+        ("rag.py", 21, "llm08-rag-without-access-filter"),   # Chroma collection.query sin where
+        ("rag.py", 22, "llm07-authorization-in-prompt"),     # "Solo puedes mostrar las nóminas del usuario..."
+        ("rag.ts", 13, "llm08-rag-without-access-filter"),   # similaritySearch(question, 4)
+        ("rag.ts", 14, "llm08-rag-without-access-filter"),   # Pinecone query sin filter
+        ("rag.ts", 18, "llm08-rag-without-access-filter"),   # asRetriever sin filtro + invoke
+        ("rag.ts", 21, "llm07-authorization-in-prompt"),     # "You must only show invoices..."
+        ("rag.py", 22, "llm10-no-rate-limit"),               # sin rate limiting en el repositorio
+        ("rag.ts", 21, "llm10-no-rate-limit"),
+    }
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("Solo puedes mostrar los pedidos del usuario actual.", True),
+    ("No reveles información de otros clientes.", True),
+    ("Si el usuario es administrador, puede ver todo.", True),
+    ("Never reveal data from other customers.", True),
+    ("Solo puedes responder preguntas sobre nuestros productos.", False),
+    ("Responde al usuario en español.", False),
+    ("Only answer questions about cooking.", False),
+])
+def test_authorization_in_prompt_patterns(text, expected):
+    from appsec_ai.engines.ai_common import AUTHZ_IN_PROMPT
+    assert bool(AUTHZ_IN_PROMPT.search(text)) is expected
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("Usa la clave sk_" "live_51HxQe2LkT9vRmW3pZaB7cD8 para la API", True),   # Stripe (partida para push protection)
+    ("La clave de acceso es Abc12345xyz", True),
+    ("La palabra clave es importante para el SEO", False),
+    ("Tu token tiene este formato: token = 'YOUR_API_TOKEN_HERE'", False),
+])
+def test_secret_in_prompt_patterns(text, expected):
+    from appsec_ai.engines.ai_common import SECRET_IN_TEXT
+    assert bool(SECRET_IN_TEXT.search(text)) is expected
+
+
 def test_agents_inventory_names_tools():
     engine = AISecurityEngine()
     engine.run(AGENTS)
@@ -93,17 +135,28 @@ def test_ai_inventory():
     assert ("model", "gpt-4o") in inv
 
 
+def test_rate_limit_rule_is_silenced_by_any_rate_limiting_signal(tmp_path):
+    shutil.copytree(FIXTURE, tmp_path / "app")
+    assert any(f.rule_id == "llm10-no-rate-limit" for f in AISecurityEngine().run(tmp_path / "app"))
+    (tmp_path / "app" / "requirements.txt").write_text("flask\nslowapi==0.1.9\n")
+    assert not any(f.rule_id == "llm10-no-rate-limit" for f in AISecurityEngine().run(tmp_path / "app"))
+
+
 def test_safe_llm_code_has_no_findings(tmp_path):
     (tmp_path / "safe.py").write_text(textwrap.dedent('''
         import anthropic
         from flask import Flask, request
+        from flask_limiter import Limiter
+        from flask_limiter.util import get_remote_address
         from markupsafe import escape
 
         app = Flask(__name__)
+        limiter = Limiter(get_remote_address, app=app)
         client = anthropic.Anthropic()
         SYSTEM = "Eres un asistente. Responde solo sobre nuestros productos."
 
         @app.route("/ask")
+        @limiter.limit("10 per minute")
         def ask():
             question = request.args.get("q", "")
             msg = client.messages.create(
@@ -184,6 +237,35 @@ def test_triage_respects_budget():
     assert any("Presupuesto" in w for w in warnings)
 
 
+def test_triage_llm_errors_become_warnings_not_crashes():
+    client = fake_client()
+    create = client.beta.messages.create
+
+    def refuse_summary(**kwargs):
+        response = create(**kwargs)
+        if "format" not in kwargs["output_config"]:
+            response.stop_reason = "refusal"
+        return response
+
+    client.beta.messages.create = refuse_summary
+    result = scan(FIXTURE, engines=["ai-security"], triager=Triager(client=client))
+    assert all(f.triage for f in result.findings)
+    assert result.ai_summary == ""
+    assert any(e.engine == "triage" and "resumen" in e.detail for e in result.engines)
+
+
+def test_cli_ai_triage_without_credentials_fails_cleanly(monkeypatch, capsys, tmp_path):
+    for var in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_PROFILE", "ANTHROPIC_CONFIG_DIR"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    from appsec_ai.cli import main
+
+    with pytest.raises(SystemExit) as e:
+        main(["scan", str(FIXTURE), "--engines", "ai-security", "--ai-triage"])
+    assert e.value.code == 2
+    assert "ANTHROPIC_API_KEY" in capsys.readouterr().err
+
+
 def test_triage_untrusted_code_is_marked_as_data():
     client = fake_client()
     Triager(client=client).triage(FIXTURE, AISecurityEngine().run(FIXTURE)[:1])
@@ -193,6 +275,26 @@ def test_triage_untrusted_code_is_marked_as_data():
 
 
 # --- Informes ----------------------------------------------------------------------
+
+def test_every_ai_rule_has_a_compliance_mapping():
+    from appsec_ai import compliance
+    from appsec_ai.engines.ai_common import RULES
+
+    assert set(compliance.RULES) == set(RULES)
+    for m in compliance.RULES.values():
+        assert set(m.atlas) <= set(compliance.ATLAS) and m.atlas
+        assert set(m.nist) <= set(compliance.NIST)
+        assert set(m.iso42001) <= set(compliance.ISO42001)
+        assert set(m.eu_ai_act) <= set(compliance.EU_AI_ACT)
+
+
+def test_report_includes_compliance_mapping():
+    result = scan(FIXTURE, engines=["ai-security"])
+    md = report.to_markdown(result)
+    assert "## Mapeo a marcos de IA" in md
+    assert "AML.T0050 Command and Scripting Interpreter" in md  # eval de la salida del LLM
+    assert any("MITRE-ATLAS AML.T0051" in x for f in result.findings for x in f.frameworks)
+
 
 def test_sarif_and_markdown():
     result = scan(FIXTURE, engines=["ai-security"])
@@ -222,7 +324,8 @@ def test_cross_engine_findings_are_merged():
     from appsec_ai.scanner import dedupe
 
     def mk(engine, rule, cwe, sev=Severity.HIGH):
-        return Finding(engine=engine, rule_id=rule, category=Category.SAST, severity=sev, title=rule,
+        category = Category.AI if rule.startswith("llm") else Category.SAST
+        return Finding(engine=engine, rule_id=rule, category=category, severity=sev, title=rule,
                        file="app.py", line=10, snippet=rule, frameworks=[cwe])
 
     merged = dedupe([mk("opengrep", "python-code-injection", "CWE-95", Severity.CRITICAL),
@@ -234,6 +337,29 @@ def test_cross_engine_findings_are_merged():
 
 RULES_DIR = Path(__file__).parent.parent / "src" / "appsec_ai" / "rules" / "sast"
 RULE_TESTS = Path(__file__).parent / "rules"
+
+
+@pytest.mark.skipif(not (shutil.which("opengrep") or shutil.which("semgrep")), reason="opengrep/semgrep no instalado")
+@pytest.mark.parametrize("lang", ["java", "go"])
+def test_ai_rules_for_java_and_go(lang):
+    """Reglas de IA en YAML (rules/ai): casos ruleid/ok en tests/rules/ai/."""
+    import subprocess
+
+    binary = shutil.which("opengrep") or shutil.which("semgrep")
+    target = next((RULE_TESTS / "ai").glob(f"{lang}.*"))
+    config = RULES_DIR.parent / "ai" / f"{lang}.yaml"
+    proc = subprocess.run([binary, "--test", "--metrics=off", "--config", str(config), str(target)],
+                          capture_output=True, text=True, timeout=600)
+    assert proc.returncode == 0, proc.stdout[-2000:] + proc.stderr[-2000:]
+
+
+@pytest.mark.skipif(not (shutil.which("opengrep") or shutil.which("semgrep")), reason="opengrep/semgrep no instalado")
+def test_java_and_go_ai_findings_are_ai_category_with_atlas(tmp_path):
+    shutil.copy(RULE_TESTS / "ai" / "go.go", tmp_path / "main.go")
+    result = scan(tmp_path, engines=["opengrep"])
+    ai = [f for f in result.findings if f.rule_id == "llm05-llm-output-to-code-exec"]
+    assert ai and ai[0].category == Category.AI and ai[0].severity == Severity.CRITICAL
+    assert "MITRE-ATLAS AML.T0050" in ai[0].frameworks
 
 
 @pytest.mark.skipif(not (shutil.which("opengrep") or shutil.which("semgrep")), reason="opengrep/semgrep no instalado")

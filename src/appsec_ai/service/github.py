@@ -117,8 +117,11 @@ class InstallationClient:
         return r.json()["id"]
 
     def complete_check_run(self, repo: str, check_run_id: int, conclusion: str, title: str, summary: str,
-                           text: str = "", annotations: list[dict] | None = None):
-        """Cierra el check. La API admite como máximo 50 anotaciones por petición."""
+                           text: str = "", annotations: list[dict] | None = None, actions: list[dict] | None = None):
+        """Cierra el check. La API admite como máximo 50 anotaciones por petición.
+
+        `actions` son botones del check (máx. 3); al pulsarlos GitHub envía `check_run.requested_action`.
+        """
         annotations = annotations or []
         chunks = [annotations[i:i + 50] for i in range(0, len(annotations), 50)] or [[]]
         for i, chunk in enumerate(chunks):
@@ -126,7 +129,29 @@ class InstallationClient:
                                   "annotations": chunk}}
             if i == len(chunks) - 1:
                 payload.update(status="completed", conclusion=conclusion)
+                if actions:
+                    payload["actions"] = actions
             self.request("PATCH", f"/repos/{repo}/check-runs/{check_run_id}", json=payload)
+
+    # -- correcciones ------------------------------------------------------------------
+
+    def open_fix_pr(self, repo: str, base_sha: str, base_branch: str, branch: str,
+                    files: list[tuple[str, str, str]], title: str, body: str, message: str) -> dict:
+        """Crea un commit con `files` [(ruta, contenido, modo)] sobre base_sha, una rama y un PR hacia base_branch.
+
+        Usa la API de Git (árbol + commit + referencia): no hace falta clonar con permisos de escritura.
+        """
+        base_tree = self.request("GET", f"/repos/{repo}/git/commits/{base_sha}").json()["tree"]["sha"]
+        tree = self.request("POST", f"/repos/{repo}/git/trees", json={
+            "base_tree": base_tree,
+            "tree": [{"path": p, "mode": mode, "type": "blob", "content": content} for p, content, mode in files],
+        }).json()["sha"]
+        commit = self.request("POST", f"/repos/{repo}/git/commits",
+                              json={"message": message, "tree": tree, "parents": [base_sha]}).json()["sha"]
+        self.request("POST", f"/repos/{repo}/git/refs", json={"ref": f"refs/heads/{branch}", "sha": commit})
+        pr = self.request("POST", f"/repos/{repo}/pulls",
+                          json={"title": title, "head": branch, "base": base_branch, "body": body}).json()
+        return {"number": pr["number"], "url": pr["html_url"], "commit": commit}
 
     # -- código -----------------------------------------------------------------------
 

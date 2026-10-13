@@ -1,0 +1,187 @@
+# Seguridad de IA para Java: Spring AI, LangChain4j y los SDK oficiales de OpenAI y Anthropic.
+# Los ids coinciden con los del motor ai-security (Python y JS/TS) para compartir OWASP, CWE y MITRE ATLAS.
+rules:
+  - id: llm05-llm-output-to-sql
+    languages: [java]
+    severity: ERROR
+    message: >-
+      La consulta SQL sale de la respuesta del modelo. Con prompt injection un atacante puede leer o borrar
+      datos. Usa consultas parametrizadas, una lista blanca de operaciones y un usuario de BD de solo lectura.
+    metadata: {category: ai, title: Salida del LLM ejecutada como SQL}
+    mode: taint
+    pattern-sources: &llm-output
+      - pattern-either:
+          - pattern: $X.call().content()             # Spring AI ChatClient
+          - pattern: $X.call().entity(...)
+          - pattern: (ChatModel $M).call(...)        # Spring AI ChatModel
+          - pattern: (ChatLanguageModel $M).generate(...)  # LangChain4j
+          - pattern: (ChatLanguageModel $M).chat(...)
+          - pattern: (ChatModel $M).chat(...)
+          - pattern: $C.chat().completions().create(...)   # OpenAI Java
+          - pattern: $C.messages().create(...)             # Anthropic Java
+    pattern-sinks:
+      - patterns:
+          - pattern: $O.$M($Q, ...)
+          - metavariable-regex:
+              metavariable: $M
+              regex: ^(queryForList|queryForObject|queryForMap|queryForRowSet|query|update|batchUpdate|execute|executeQuery|executeUpdate|executeLargeUpdate|addBatch|prepareStatement|createNativeQuery|createQuery)$
+          - focus-metavariable: $Q
+
+  - id: llm05-llm-output-to-code-exec
+    languages: [java]
+    severity: ERROR
+    message: >-
+      La respuesta del modelo se ejecuta como comando o script. Con prompt injection esto es ejecución remota
+      de código. Nunca ejecutes salida del modelo; si es imprescindible, usa un sandbox aislado.
+    metadata: {category: ai, title: Salida del LLM ejecutada como código o comando}
+    mode: taint
+    pattern-sources: *llm-output
+    pattern-sinks:
+      - pattern-either:
+          - pattern: Runtime.getRuntime().exec(...)
+          - pattern: new ProcessBuilder(...)
+          - pattern: (ScriptEngine $E).eval(...)
+          - pattern: (GroovyShell $G).evaluate(...)
+
+  - id: llm05-llm-output-to-request
+    languages: [java]
+    severity: ERROR
+    message: >-
+      El modelo decide a qué URL se conecta el servidor (SSRF): puede alcanzar servicios internos o exfiltrar
+      datos. Valida el destino contra una lista blanca.
+    metadata: {category: ai, title: Salida del LLM usada como destino de una petición HTTP (SSRF)}
+    mode: taint
+    pattern-sources: *llm-output
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: (RestTemplate $R).$M($U, ...)
+              - pattern: new URL($U)
+              - pattern: URI.create($U)
+              - pattern: HttpRequest.newBuilder($U)
+              - pattern: $W.uri($U, ...)
+          - focus-metavariable: $U
+
+  - id: llm05-llm-output-to-filesystem
+    languages: [java]
+    severity: ERROR
+    message: El modelo controla rutas de ficheros (path traversal, lectura o borrado de ficheros).
+    metadata: {category: ai, title: Salida del LLM usada como ruta de fichero}
+    mode: taint
+    pattern-sources: *llm-output
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: new File($P, ...)
+              - pattern: Path.of($P, ...)
+              - pattern: Paths.get($P, ...)
+              - pattern: new FileInputStream($P)
+              - pattern: new FileOutputStream($P, ...)
+              - pattern: new FileReader($P, ...)
+              - pattern: new FileWriter($P, ...)
+          - focus-metavariable: $P
+
+  - id: llm05-llm-output-selects-function
+    languages: [java]
+    severity: ERROR
+    message: >-
+      La respuesta del modelo elige qué clase, método o bean se ejecuta. Restringe las opciones a una lista
+      blanca explícita.
+    metadata: {category: ai, title: La salida del LLM decide qué función se ejecuta}
+    mode: taint
+    pattern-sources: *llm-output
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: Class.forName($X, ...)
+              - pattern: $C.getMethod($X, ...)
+              - pattern: $C.getDeclaredMethod($X, ...)
+              - pattern: $CTX.getBean($X, ...)
+          - focus-metavariable: $X
+
+  - id: llm01-untrusted-input-in-system-prompt
+    languages: [java]
+    severity: WARNING
+    message: >-
+      Datos de la petición HTTP se insertan en las instrucciones de sistema, lo que permite sobrescribir el
+      comportamiento del modelo. Mantén el prompt de sistema constante y pasa la entrada como mensaje de usuario.
+    metadata: {category: ai, title: Entrada no confiable dentro del prompt de sistema}
+    mode: taint
+    pattern-sources:
+      - patterns:
+          - pattern-either:
+              - pattern-inside: '$RET $METHOD(..., @RequestParam $T $P, ...) { ... }'
+              - pattern-inside: '$RET $METHOD(..., @RequestParam(...) $T $P, ...) { ... }'
+              - pattern-inside: '$RET $METHOD(..., @PathVariable $T $P, ...) { ... }'
+              - pattern-inside: '$RET $METHOD(..., @RequestBody $T $P, ...) { ... }'
+              - pattern-inside: '$RET $METHOD(..., @RequestHeader(...) $T $P, ...) { ... }'
+          - pattern: $P
+      - pattern: (HttpServletRequest $R).getParameter(...)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: $B.system($S)
+              - pattern: new SystemMessage($S)
+              - pattern: SystemMessage.from($S)
+              - pattern: SystemMessage.systemMessage($S)
+          - focus-metavariable: $S
+
+  - id: llm06-excessive-agency-tool
+    languages: [java]
+    severity: ERROR
+    message: >-
+      Esta herramienta del agente (@Tool) hace una operación peligrosa con argumentos que decide el modelo.
+      Con prompt injection un atacante la puede invocar. Requiere confirmación humana, mínimo privilegio y
+      validación estricta de argumentos.
+    metadata: {category: ai, title: Herramienta de agente con acciones peligrosas}
+    patterns:
+      - pattern-either:
+          - pattern-inside: |
+              @Tool(...)
+              $RET $M(...) { ... }
+          - pattern-inside: |
+              @Tool
+              $RET $M(...) { ... }
+      - pattern-either:
+          - pattern: Runtime.getRuntime().exec(...)
+          - pattern: new ProcessBuilder(...)
+          - pattern: Files.delete(...)
+          - pattern: Files.deleteIfExists(...)
+          - pattern: (File $F).delete()
+          - patterns:
+              - pattern: $J.$OP("$SQL", ...)
+              - metavariable-regex:
+                  metavariable: $SQL
+                  regex: (?i)\b(delete\s+from|drop\s+(table|database)|truncate|update\s+\w+\s+set|insert\s+into|alter\s+table|grant)\b
+
+  - id: llm07-secret-in-system-prompt
+    languages: [java]
+    severity: ERROR
+    message: >-
+      El prompt de sistema contiene lo que parece una credencial. Los prompts de sistema se pueden extraer con
+      prompt injection: nunca incluyas secretos en ellos.
+    metadata: {category: ai, title: Secreto incluido en el prompt de sistema}
+    patterns:
+      - pattern-either:
+          - pattern: '@SystemMessage("$S")'
+          - pattern: $B.system("$S")
+          - pattern: new SystemMessage("$S")
+      - metavariable-regex:
+          metavariable: $S
+          regex: (?is).*?((api[_ -]?key|password|passwd|contraseña|clave|secret|token|credential|credencial)\w*[^\n.:=]{0,40}?(\bis|\bes|:|=)\s*["']?(?=[A-Za-z0-9_\-+/]*\d)[A-Za-z0-9_\-+/]{8,}|\bsk-[A-Za-z0-9_\-]{16,}|\b[sr]k_(live|test)_[A-Za-z0-9]{16,}|\bAKIA[0-9A-Z]{16}\b)
+
+  - id: llm07-authorization-in-prompt
+    languages: [java]
+    severity: WARNING
+    message: >-
+      El prompt de sistema le pide al modelo que decida qué datos puede ver cada usuario. Con prompt injection
+      esa instrucción se salta. Aplica la autorización en el código, antes de que los datos lleguen al modelo.
+    metadata: {category: ai, title: Control de acceso delegado en el prompt}
+    patterns:
+      - pattern-either:
+          - pattern: '@SystemMessage("$S")'
+          - pattern: $B.system("$S")
+          - pattern: new SystemMessage("$S")
+      - metavariable-regex:
+          metavariable: $S
+          regex: (?is).*?(\b(solo|sólo|únicamente)\s+(puedes|debes|podrás)\s+(\w+\s+){0,3}?(mostrar|ver|devolver|consultar|acceder|revelar|dar|modificar|borrar)\b[^.\n]{0,80}?\b(usuario|cliente|tenant|empresa|cuenta|empleado)|\bno\s+(reveles|muestres|devuelvas|compartas|des|accedas)\b[^.\n]{0,80}?\b(otros|otras|demás)\s+(usuarios|clientes|empleados|cuentas|empresas|tenants)|\b(can|may|must|should)\s+only\s+(show|return|reveal|access|display|share|modify|delete)\b[^.\n]{0,80}?\b(user|customer|tenant|account|employee)|\b(never|do\s+not|don't)\s+(reveal|show|return|share|disclose|access)\b[^.\n]{0,80}?\bother\s+(users|customers|accounts|tenants|employees))

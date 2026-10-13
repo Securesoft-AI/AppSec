@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from collections import Counter
 
+from appsec_ai.fixes import FileFix, fixable
 from appsec_ai.models import Finding, ScanResult, Severity
 from appsec_ai.report import CATEGORY_LABEL, SEV_ICON
 
 CHECK_NAME = "appsec-ai"
 COMMENT_MARKER = "<!-- appsec-ai:pr-comment -->"
+FIX_MARKER = "<!-- appsec-ai:fix-comment -->"
 ANNOTATION_LEVEL = {"critical": "failure", "high": "failure", "medium": "warning", "low": "notice", "info": "notice"}
 MAX_ANNOTATIONS = 200
 MAX_COMMENT_FINDINGS = 15
@@ -102,3 +104,57 @@ def pr_comment(result: ScanResult, details_url: str = "") -> str:
     if result.suppressed_inline:
         lines += ["", f"_{result.suppressed_inline} hallazgos silenciados con `appsec-ai: ignore` / `nosec`._"]
     return "\n".join(lines)
+
+
+# -- correcciones ---------------------------------------------------------------------------
+
+def fix_actions(result: ScanResult) -> list[dict]:
+    """Botón del check para abrir un PR con las correcciones, si hay problemas confirmados por la IA."""
+    if not fixable(visible(result)):
+        return []
+    # GitHub limita la etiqueta a 20 caracteres y la descripción a 40.
+    return [{"label": "Abrir PR con fixes", "description": "Corrige con IA los problemas confirmados",
+             "identifier": "open_fix_pr"}]
+
+
+def fix_pr_title(fixes: list[FileFix]) -> str:
+    n = sum(len(f.findings) for f in fixes)
+    return f"appsec-ai: corrige {n} problema{'s' if n != 1 else ''} de seguridad"
+
+
+def fix_pr_body(fixes: list[FileFix], skipped: dict[str, str], source: str) -> str:
+    lines = ["### 🛡️ Correcciones de seguridad propuestas por appsec-ai", "",
+             f"Generadas con IA a partir de {source}. **Revísalas antes de fusionar**: comprueba que el "
+             "comportamiento sigue siendo el esperado y que pasan los tests.", ""]
+    for fx in fixes:
+        lines += [f"#### `{fx.path}`", ""]
+        for f in fx.findings:
+            sev = f.effective_severity.value
+            lines.append(f"- {SEV_ICON[sev]} **{f.title}** (línea {f.line}, `{f.rule_id}`)")
+        if fx.summary:
+            lines += ["", fx.summary]
+        lines.append("")
+    if skipped:
+        lines += ["#### Sin corrección automática", ""]
+        lines += [f"- `{path}`: {reason}" for path, reason in skipped.items()]
+        lines.append("")
+    return "\n".join(lines)
+
+
+def fix_comment(pr_url: str, n_files: int) -> str:
+    return (f"{FIX_MARKER}\n🛠️ He abierto {pr_url} con las correcciones de seguridad para {n_files} "
+            f"fichero{'s' if n_files != 1 else ''}. Revísalo antes de fusionarlo.")
+
+
+def fix_failed_comment(skipped: dict[str, str]) -> str:
+    lines = [FIX_MARKER, "🛠️ No he podido generar una corrección automática segura:", ""]
+    lines += [f"- `{path}`: {reason}" for path, reason in skipped.items()]
+    lines += ["", "Las anotaciones del check explican cómo corregir cada problema a mano."]
+    return "\n".join(lines)
+
+
+FIX_PERMISSION_COMMENT = (
+    f"{FIX_MARKER}\n🛠️ Para abrir PRs con correcciones, appsec-ai necesita permiso de escritura en el contenido "
+    "del repositorio (Contents: Read & write). Un administrador puede concederlo en la configuración de la "
+    "instalación de la GitHub App."
+)

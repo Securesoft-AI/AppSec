@@ -37,10 +37,17 @@ Python se analiza sobre el AST y JS/TS sobre el árbol de [tree-sitter], con flu
 | `llm06-excessive-agency-tool` | LLM06 | Herramientas de agentes o MCP con shell, borrado, SQL dinámico o de escritura, pagos, emails |
 | `llm06-mcp-http-without-auth` | LLM06 | Servidor MCP publicado por HTTP/SSE sin autenticación |
 | `llm07-secret-in-system-prompt` | LLM07 | Credenciales dentro del prompt de sistema |
+| `llm07-authorization-in-prompt` | LLM07 | Control de acceso delegado en el prompt ("solo puedes mostrar los datos del usuario") |
+| `llm08-rag-without-access-filter` | LLM08 | Búsqueda en un vector store con la pregunta del usuario y sin filtro por usuario o tenant (LangChain, Chroma, Pinecone) |
 | `llm10-no-output-limit` | LLM10 | Llamadas OpenAI-compatibles o Vercel AI sin límite de tokens |
 | `llm10-unbounded-agent-loop` | LLM10 | Agentes con `max_iterations=None` |
+| `llm10-no-rate-limit` | LLM10 | Endpoints que llaman al LLM con entrada del usuario, sin ninguna librería de rate limiting en el repositorio |
+
+Java (Spring AI, LangChain4j, SDK de OpenAI y Anthropic) y Go (go-openai, openai-go, anthropic-sdk-go, langchaingo, Gemini) se analizan con reglas de flujo de datos de Opengrep/Semgrep en `src/appsec_ai/rules/ai/`, con los mismos ids: salida del LLM hacia SQL, comandos, peticiones HTTP, ficheros, HTML o reflexión; entrada de la petición en el prompt de sistema; herramientas `@Tool` peligrosas; secretos y autorización en el prompt.
 
 Frameworks reconocidos: Anthropic, OpenAI, Gemini, Bedrock, Mistral, LiteLLM, LangChain/LangGraph (Python y JS), LlamaIndex, CrewAI, AutoGen, Pydantic AI, OpenAI Agents SDK, Claude Agent SDK, Vercel AI SDK, Mastra, MCP (FastMCP y SDK oficial) y vector stores.
+
+Cada hallazgo de IA incluye sus técnicas de MITRE ATLAS, y el informe añade una tabla que mapea las reglas encontradas a MITRE ATLAS, NIST AI RMF, ISO/IEC 42001 y EU AI Act (`src/appsec_ai/compliance.py`). El mapeo es orientativo, no una evaluación de conformidad.
 
 ### SAST (`src/appsec_ai/rules/sast/`)
 
@@ -94,6 +101,17 @@ Opciones del triage con IA:
 - `--lang`: idioma de las explicaciones.
 
 Los resultados del triage se guardan en `.appsec-ai-cache/` dentro del repositorio analizado, así que reescanear sin cambios no consume tokens.
+
+### Evaluación del triage
+
+`evals/triage/` tiene casos etiquetados a mano: problemas reales y código parecido pero seguro que el escáner marca igualmente. El script mide cuántos problemas reales descarta el triage (el error caro), cuántos falsos positivos elimina, si acierta la severidad y cuánto cuesta. Llama a la API de verdad:
+
+```bash
+python evals/triage/run_eval.py --repeat 3 --out resultados.json
+python evals/triage/run_eval.py --effort low     # comparar coste y calidad
+```
+
+Sale con código 1 si descarta algún problema real. Al añadir o cambiar reglas, `tests/test_eval.py` avisa si los casos y `labels.json` dejan de coincidir.
 
 ## Servicio SaaS
 

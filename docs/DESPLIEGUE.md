@@ -26,7 +26,8 @@ GitHub ──webhook──► API (FastAPI)  ──► Postgres (tabla scans = c
 2. Rellena los datos con los de `deploy/github-app-manifest.json`:
    - **Webhook URL:** `https://TU-DOMINIO/webhooks/github`.
    - **Webhook secret:** una cadena aleatoria larga (`openssl rand -hex 32`). Es el valor de `GITHUB_WEBHOOK_SECRET`.
-   - **Permisos del repositorio:** Contents *Read*, Metadata *Read*, Pull requests *Read & write*, Checks *Read & write*.
+   - **Permisos del repositorio:** Contents *Read & write*, Metadata *Read*, Pull requests *Read & write*, Checks *Read & write*.
+     La escritura en Contents solo se usa para el botón **Abrir PR con fixes**: crea una rama `appsec-ai/fix-…` y abre un PR, nunca escribe en ramas existentes. Si un cliente instala la App solo con lectura, el botón explica en el PR qué permiso falta.
    - **Eventos:** Pull request, Push, Check run.
 3. Crea la App y apunta el **App ID** (`GITHUB_APP_ID`).
 4. Genera una **clave privada**: se descarga un `.pem`. Para ponerla en una sola línea:
@@ -52,7 +53,7 @@ Cualquier plataforma que ejecute contenedores sirve: Fly.io, Railway, Render, Go
 - **API**: 1 instancia pequeña, comando `appsec-ai serve --port 8000`.
 - **Worker**: 1 o más instancias, comando `appsec-ai worker`. Calcula unos 2 GB de RAM.
 - **Postgres** gestionado, con `DATABASE_URL=postgresql+psycopg://usuario:clave@host:5432/db`.
-- Los secretos (`GITHUB_APP_PRIVATE_KEY`, `GITHUB_WEBHOOK_SECRET`, `ANTHROPIC_API_KEY`, `ADMIN_API_TOKEN`) van en el gestor de secretos de la plataforma, **nunca** en el repositorio.
+- Los secretos (`GITHUB_APP_PRIVATE_KEY`, `GITHUB_WEBHOOK_SECRET`, `ANTHROPIC_API_KEY`, `ADMIN_API_TOKEN`, `DATA_ENCRYPTION_KEY`) van en el gestor de secretos de la plataforma, **nunca** en el repositorio.
 
 Coste orientativo para empezar: 20–50 $/mes más el uso de la API de Claude.
 
@@ -63,11 +64,24 @@ Coste orientativo para empezar: 20–50 $/mes más el uso de la API de Claude.
 - El código del cliente se clona en un directorio temporal que se borra siempre, también si hay errores. Se descartan el historial, los hooks, LFS y los enlaces simbólicos.
 - El worker se ejecuta sin privilegios (`uid 10001`) y con límites de memoria, CPU y tamaño del repositorio.
 - El triage con IA trata el código del cliente como datos no confiables (defensa frente a prompt injection).
+- **Escaneo aislado** (`SCAN_SANDBOX=subprocess`, por defecto): los motores analizan el código en un subproceso
+  sin secretos en el entorno (ni la clave de la GitHub App, ni la de Anthropic, ni `DATABASE_URL`), en Python
+  aislado (`-I`, para que el repositorio no pueda suplantar módulos), en su propia sesión de procesos que se
+  mata entera al agotar `SCAN_TIMEOUT`, y con límites de CPU, tamaño de fichero y descriptores. Los motores
+  externos de la CLI también reciben solo un entorno mínimo.
+- `SCAN_SANDBOX_CMD` envuelve ese subproceso con un sandbox del sistema. Ejemplo con bubblewrap (hay que
+  instalarlo en la imagen): `bwrap --unshare-all --share-net --die-with-parent --ro-bind / / --dev /dev --proc /proc --tmpfs /tmp --bind {src} {src}`.
+  Así el escaneo solo puede escribir en su directorio.
+- **Cifrado en reposo** con `DATA_ENCRYPTION_KEY` (Fernet): resultados de escaneos y detalle de las correcciones
+  en la base de datos, y la caché del triage en disco. Para rotar la clave: `DATA_ENCRYPTION_KEY=nueva,antigua`
+  (cifra con la primera y descifra con todas). Las filas anteriores sin cifrar se siguen leyendo. Sin clave, el
+  servicio arranca pero lo avisa en el log.
 - **Pendiente antes de abrir al público:**
-  - aislar cada escaneo en su propio contenedor efímero (gVisor/Firecracker);
+  - un contenedor efímero por escaneo (gVisor/Firecracker, p. ej. un Job de Kubernetes o de Cloud Run con
+    `runtimeClassName: gvisor`). El subproceso ya no tiene secretos, pero comparte red y sistema de ficheros
+    con el worker. Como paso intermedio, ejecuta el worker con el runtime `runsc` de gVisor;
   - login con GitHub en el panel, que sustituya a `ADMIN_API_TOKEN`;
-  - límites por plan;
-  - cifrar en reposo los resultados de los escaneos.
+  - límites por plan.
 
 ## 5. Variables de entorno
 
@@ -80,7 +94,12 @@ Coste orientativo para empezar: 20–50 $/mes más el uso de la API de Claude.
 | `ANTHROPIC_API_KEY` | No | Activa el triage con Claude |
 | `AI_MODEL` / `AI_EFFORT` | No | Modelo y esfuerzo del triage |
 | `AI_MAX_REQUESTS_PR` / `AI_MAX_REQUESTS_FULL` | No | Presupuesto de peticiones de IA por escaneo |
+| `AI_CACHE_DIR` | No | Directorio persistente para la caché del triage (una subcarpeta por repositorio). Sin él, cada escaneo vuelve a pagar todas las peticiones |
 | `REPORT_LANGUAGE` | No | `es` o `en` |
 | `FAIL_ON` | No | Severidad que hace fallar el check (por defecto `high`) |
 | `MAX_REPO_MB` | No | Tamaño máximo del repositorio (por defecto 500) |
 | `ADMIN_API_TOKEN` | No | Acceso provisional a la API REST |
+| `DATA_ENCRYPTION_KEY` | Sí en producción | Clave Fernet para cifrar resultados y caché. Genérala con `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"` |
+| `SCAN_SANDBOX` | No | `subprocess` (por defecto) o `none` (solo desarrollo) |
+| `SCAN_SANDBOX_CMD` | No | Envoltorio del escaneo aislado (bubblewrap, firejail...). `{src}` es el directorio del escaneo |
+| `SCAN_TIMEOUT` | No | Segundos máximos por escaneo (por defecto 900) |
