@@ -1,149 +1,171 @@
-# Requisitos — Plataforma SaaS de Seguridad de Aplicaciones e IA
+# Requisitos — Plataforma SaaS de Seguridad de Código e IA
 
-> Versión 0.1 (borrador) · 2026-10-13
-> Estado: para validar con clientes potenciales antes de escribir código de producto.
+> Versión 0.2 · 2026-10-13
+> Cambios respecto a la 0.1: modelo 100 % SaaS self‑service, mercado internacional + España,
+> presupuesto de IA = créditos de la API de Claude, núcleo del motor ya implementado (`src/appsec_ai`).
 
 ---
 
 ## 1. Visión
 
-Una plataforma SaaS que permite a equipos de desarrollo pequeños y medianos **saber si su código y sus aplicaciones con IA son seguros para salir a producción**, con hallazgos priorizados, explicados en lenguaje claro y con la corrección propuesta como pull request.
+Un SaaS que conectas a tu repositorio y que, sin equipo de seguridad, te dice **qué es vulnerable en tu código, en tu infraestructura y en tus funcionalidades con IA**, por qué importa y cómo arreglarlo, abriendo la corrección como pull request.
 
-**Frase de posicionamiento (provisional):**
-"Revisión de seguridad para apps con IA y su código, en minutos y no en semanas, sin necesidad de un equipo de AppSec."
+**Posicionamiento:** "El escáner de seguridad que entiende las apps con IA". Ejecuta los motores open source de referencia y añade lo que estos no hacen: análisis específico de LLMs y agentes, eliminación de falsos positivos con IA, explicación clara y corrección automática.
 
-## 2. Principio rector: foco
+**Decisiones tomadas**
+- **Producto, no consultoría.** El cliente se da de alta, conecta GitHub y paga con tarjeta. Sin reuniones obligatorias.
+- **Motores open source** (con licencias aptas para SaaS) para SAST, secretos, dependencias e IaC. No se compite en motores, sino en inteligencia y experiencia de uso.
+- **La capa de IA es el producto**: detector propio de riesgos de LLM y agentes + triage, explicación y corrección con Claude.
+- **Mercado internacional (inglés) y España (español) desde el día 1**: interfaz, informes y explicaciones bilingües (el triage ya acepta `--lang`).
+- **IAST queda fuera**: ver sección 9.
 
-Construir "SAST + IAST + IaC + seguridad de IA" a la vez compite con Snyk, Checkmarx, Veracode, Wiz, Semgrep, Aikido y Contrast, que tienen cientos de ingenieros. Con un fundador y 1000 $ de presupuesto, la única estrategia viable es:
+## 2. Cliente objetivo (ICP)
 
-1. **Una cuña (wedge) estrecha** donde los grandes son débiles → **seguridad de aplicaciones que usan LLMs y agentes**.
-2. **Reutilizar motores open source** para lo que ya está resuelto (SAST, IaC, secretos, dependencias) y aportar valor en la capa de **contexto, priorización con IA y corrección automática**.
-3. **Cobrar desde el primer mes**, aunque sea a 3 clientes.
-
-## 3. Cliente objetivo (ICP)
-
-| Prioridad | Perfil | Dolor | Quién paga |
+| Prioridad | Perfil | Dolor | Quién compra |
 |---|---|---|---|
-| 1 | Startups / scale-ups (10–200 devs) que lanzan features con LLMs, RAG o agentes | Clientes enterprise les piden evidencia de seguridad de IA (cuestionarios, EU AI Act, ISO 42001) y no tienen equipo de AppSec | CTO / Head of Engineering |
-| 2 | Consultoras y pentesters freelance | Necesitan informes de revisión de IA rápidos y repetibles | El consultor (licencia por cliente) |
-| 3 | Pymes con apps web sin herramientas de AppSec | Requisitos de clientes / NIS2 / ISO 27001 | CTO |
+| 1 | Startups y scale‑ups (5–200 devs) que lanzan funcionalidades con LLMs, RAG o agentes | Sus clientes enterprise les piden pruebas de seguridad de IA (cuestionarios, EU AI Act, ISO 42001) y no tienen equipo de AppSec | CTO / Head of Engineering, con tarjeta |
+| 2 | Pymes y agencias de desarrollo sin herramientas de AppSec | Requisitos de clientes, NIS2, ISO 27001, ENS (España) | CTO / responsable técnico |
+| 3 | Consultoras y pentesters | Informes rápidos y repetibles para sus clientes | Licencia multi‑cliente |
 
-**Fuera de alcance inicial:** grandes empresas (ciclo de venta de 6–12 meses, requieren SOC 2, on‑prem, SSO, etc.).
+**Canal de entrada:** tus contactos como *design partners* (5–10 empresas con acceso gratuito 60 días a cambio de feedback semanal y de convertirse en clientes de pago o dar un testimonio).
 
-## 4. Alcance por fases
+## 3. Arquitectura del producto
 
-### Fase 0 — Validación (semanas 1–3) · coste ≈ 0 $
-- [ ] 20 conversaciones con CTOs / responsables de seguridad del ICP 1.
-- [ ] Landing page con lista de espera y precio visible.
-- [ ] Ofrecer 3–5 **revisiones de seguridad de IA "manuales asistidas"** pagadas (300–1500 €) usando prototipos internos. Esto financia el desarrollo y enseña qué automatizar.
-- **Criterio de salida:** ≥ 3 clientes que paguen o firmen carta de intención.
+```
+GitHub App ──► Cola de trabajos ──► Worker efímero (contenedor aislado)
+                                     ├─ Gitleaks      (secretos)        MIT
+                                     ├─ OSV‑Scanner   (dependencias)    Apache 2.0
+                                     ├─ Checkov       (IaC)             Apache 2.0
+                                     ├─ Opengrep      (SAST, reglas propias) LGPL
+                                     └─ Motor IA propio (OWASP LLM Top 10)
+                                            │
+                                     Triage con Claude (falsos positivos, severidad, fix)
+                                            │
+              Postgres ◄── Resultados ──────┘──► Comentario en PR · SARIF · Panel web · Informe PDF
+```
 
-### Fase 1 — MVP (semanas 3–10)
-Módulos incluidos:
+**Estado actual:** el bloque del worker (motores + motor IA + triage + informes Markdown/JSON/SARIF + CLI) está implementado y probado. Ver `README.md`.
 
-**M1. Conexión de repositorios**
-- RF-1.1 Login con GitHub (OAuth / GitHub App). GitLab en fase 2.
-- RF-1.2 Seleccionar repositorios; escaneo en cada push / PR y bajo demanda.
-- RF-1.3 Comentarios en PR con hallazgos nuevos (solo diferencias, no ruido).
+## 4. Requisitos funcionales
 
-**M2. Seguridad de IA / LLM (el diferenciador)**
-- RF-2.1 Inventario automático de uso de IA en el código: SDKs (OpenAI, Anthropic, Bedrock, Vertex, Azure OpenAI), frameworks (LangChain/LangGraph, LlamaIndex, MCP, Agents SDK), modelos, prompts de sistema, herramientas (tools) que los agentes pueden invocar y permisos que tienen.
-- RF-2.2 Detección de patrones de riesgo mapeados a **OWASP Top 10 para LLM** y **OWASP Top 10 para Aplicaciones Agénticas**:
-  - entrada de usuario concatenada en prompts sin separación (prompt injection),
-  - salida del LLM pasada a `eval`, shell, SQL, HTML o llamadas HTTP sin validación (insecure output handling),
-  - herramientas de agente con permisos excesivos (escritura en BD, envío de emails, ejecución de código) sin confirmación humana (excessive agency),
-  - secretos o PII en prompts / logs,
-  - RAG que ingiere contenido no confiable sin control de acceso por documento,
-  - servidores MCP sin autenticación o con alcance excesivo,
-  - ausencia de límites de coste / tokens / rate limit.
-- RF-2.3 **Modelo de amenazas generado** por sistema de IA detectado (flujo de datos, activos, caminos de ataque) con mapeo a MITRE ATLAS y NIST AI RMF.
-- RF-2.4 **Evidencia citada**: cada control marcado como Presente / Ausente / Desconocido con las líneas de código que lo justifican. El usuario confirma o descarta.
-- RF-2.5 Informe exportable (PDF / Markdown) apto para cuestionarios de seguridad de clientes y para documentación de EU AI Act / ISO 42001.
+Leyenda: ✅ hecho · 🔜 MVP · ⏭ posterior
 
-**M3. AppSec clásico (vía motores open source)**
-- RF-3.1 SAST: Opengrep (fork LGPL de Semgrep) con reglas propias. *Atención: las reglas del registro de Semgrep tienen una licencia que prohíbe usarlas en un SaaS competidor; no usarlas.*
-- RF-3.2 Secretos: Gitleaks (MIT).
-- RF-3.3 Dependencias (SCA): OSV-Scanner / Trivy (Apache 2.0).
-- RF-3.4 IaC: Checkov o KICS (Apache 2.0) para Terraform, Kubernetes, Dockerfile, CloudFormation.
-- RF-3.5 **Triage con LLM**: para cada hallazgo, decidir si es explotable en contexto, explicarlo y descartar falsos positivos con justificación. Este es el valor añadido frente a ejecutar las herramientas gratis.
+### M1. Motor de escaneo (núcleo)
+- ✅ RF‑1.1 Orquestar Gitleaks, OSV‑Scanner, Checkov y Opengrep con un modelo de hallazgos común.
+- ✅ RF‑1.2 Ignorar `node_modules`, `.venv`, `vendor`, etc.; tolerar ficheros con errores de sintaxis.
+- ✅ RF‑1.3 Deduplicar hallazgos con huella estable (independiente del número de línea).
+- ✅ RF‑1.4 Secretos siempre redactados: nunca se almacena el valor.
+- ✅ RF‑1.5 Salidas Markdown, JSON y SARIF 2.1.0 (GitHub Code Scanning, GitLab, Azure DevOps).
+- ✅ RF‑1.6 Modo CI: `--fail-on <severidad>`.
+- 🔜 RF‑1.7 Reglas SAST propias para Opengrep (inyección SQL, comandos, SSRF, deserialización, XSS) en Python, JS/TS, Java y Go. **Prohibido** usar reglas del registro de Semgrep (licencia incompatible con SaaS).
+- 🔜 RF‑1.8 Escaneo incremental: en un PR solo se analizan los ficheros cambiados.
 
-**M4. Corrección**
-- RF-4.1 Propuesta de corrección por hallazgo (diff).
-- RF-4.2 Botón "Abrir PR con la corrección".
+### M2. Seguridad de IA (diferenciador)
+- ✅ RF‑2.1 Inventario de IA: SDKs (Anthropic, OpenAI, Gemini, Bedrock, Mistral…), frameworks (LangChain/LangGraph, LlamaIndex, CrewAI, Agents SDK, MCP), modelos usados, herramientas de agentes y vector stores.
+- ✅ RF‑2.2 Detección (Python con análisis de flujo en el AST; JS/TS heurístico):
+  - LLM01: entrada del usuario en el prompt de sistema, concatenación de entrada con instrucciones, prompt injection indirecta (contenido web/ficheros/RAG).
+  - LLM02: prompts/respuestas escritos en logs.
+  - LLM05: salida del LLM hacia `eval`/shell, SQL, peticiones HTTP (SSRF), sistema de ficheros, HTML (XSS).
+  - LLM06: herramientas de agente con acciones peligrosas (shell, SQL de escritura, borrado, pagos, emails).
+- 🔜 RF‑2.3 Análisis de JS/TS con AST real (tree‑sitter) en lugar de heurísticas.
+- 🔜 RF‑2.4 Más reglas: LLM07 (secretos o lógica de autorización en el prompt de sistema), LLM08 (RAG sin control de acceso por documento), LLM10 (sin límites de tokens/coste/rate limit), servidores MCP sin autenticación.
+- 🔜 RF‑2.5 Mapeo a MITRE ATLAS, NIST AI RMF, ISO 42001 y EU AI Act en el informe.
+- ⏭ RF‑2.6 Modelo de amenazas generado por sistema de IA (flujo de datos, activos, caminos de ataque).
+- ⏭ RF‑2.7 Red teaming dinámico: pruebas automáticas de prompt injection/jailbreak contra el endpoint desplegado.
 
-**M5. Panel y cuenta**
-- RF-5.1 Panel por organización: hallazgos por severidad, por repo, tendencia.
-- RF-5.2 Multi‑tenant con aislamiento estricto entre clientes.
-- RF-5.3 Facturación con Stripe (planes mensuales).
-- RF-5.4 Roles básicos: owner, miembro.
+### M3. Capa de IA (triage y corrección)
+- ✅ RF‑3.1 Veredicto por hallazgo (real / falso positivo / revisar), severidad en contexto, explicación, escenario de ataque y corrección con código.
+- ✅ RF‑3.2 Una petición por fichero (el contexto se envía una sola vez), salida estructurada validada con JSON Schema.
+- ✅ RF‑3.3 El código analizado se trata como dato no confiable (defensa frente a prompt injection en el propio código del cliente).
+- ✅ RF‑3.4 Caché local por huella: reescanear sin cambios no gasta tokens.
+- ✅ RF‑3.5 Presupuesto máximo de peticiones por escaneo; los ficheros más graves se analizan primero.
+- ✅ RF‑3.6 Resumen ejecutivo de seguridad de IA para el CTO.
+- 🔜 RF‑3.7 Botón "Abrir PR con la corrección".
+- 🔜 RF‑3.8 El usuario marca "útil / no útil" en cada hallazgo; ese feedback alimenta el conjunto de evaluación.
 
-### Fase 2 — Crecimiento (meses 3–6)
-- Red‑teaming dinámico de endpoints de IA (pruebas de prompt injection / jailbreak contra la app desplegada; DAST para LLM).
-- Ciclo de vida de revisión: aprobaciones, bloqueantes con responsable, re‑revisión automática cuando cambian las herramientas o permisos de un agente.
-- GitLab y Bitbucket; integración con Jira / Slack.
-- SSO (SAML/OIDC) y registros de auditoría.
-- Mapeo a ISO 42001 y EU AI Act.
-
-### Fase 3 — Más adelante (solo si hay tracción)
-- **IAST**: requiere un agente instrumentando el runtime por lenguaje (Java, Node, Python, .NET…). Es de lo más costoso de construir y mantener; no abordarlo hasta tener ingresos y equipo.
-- CSPM / seguridad de nube en tiempo de ejecución.
-- Despliegue on‑prem / VPC para enterprise.
+### M4. Plataforma SaaS
+- 🔜 RF‑4.1 Registro e inicio de sesión con GitHub; GitHub App con permisos mínimos (lectura de código, escritura solo de comentarios/checks/PRs).
+- 🔜 RF‑4.2 Escaneo en cada PR (comentario con hallazgos nuevos y check de estado) y escaneo completo programado.
+- 🔜 RF‑4.3 Panel por organización: hallazgos por severidad, repositorio, área y tendencia; inventario de IA.
+- 🔜 RF‑4.4 Multi‑tenant con aislamiento estricto; cada escaneo en un contenedor efímero que se destruye al terminar.
+- 🔜 RF‑4.5 Facturación con Stripe (planes, límites de uso, prueba gratuita de 14 días).
+- 🔜 RF‑4.6 Interfaz y correos en inglés y español.
+- 🔜 RF‑4.7 Informe PDF descargable para cuestionarios de seguridad de clientes.
+- ⏭ RF‑4.8 GitLab y Bitbucket, Slack, Jira, SSO (SAML/OIDC), registros de auditoría.
 
 ## 5. Requisitos no funcionales
 
 | ID | Requisito |
 |---|---|
-| RNF-1 Seguridad propia | El código del cliente se clona en un entorno efímero aislado por escaneo y se borra al terminar. Nunca se usa para entrenar modelos. Cifrado en tránsito (TLS 1.2+) y en reposo. |
-| RNF-2 Confianza | Página pública de seguridad, DPA de RGPD, residencia de datos en la UE. SOC 2 / ISO 27001 cuando haya ingresos que lo justifiquen. |
-| RNF-3 Permisos mínimos | GitHub App con permisos de solo lectura salvo para abrir PRs. |
-| RNF-4 Rendimiento | Escaneo incremental de PR < 3 min; escaneo completo de repo mediano < 15 min. |
-| RNF-5 Coste por escaneo | Coste de LLM controlado: limitar tokens por escaneo, usar modelos pequeños para filtrado y modelos grandes solo para triage final; caché por hash de fichero. Objetivo: < 10 % del precio del plan. |
-| RNF-6 Calidad | Tasa de falsos positivos medida sobre un conjunto de repos vulnerables de prueba (p. ej. OWASP Juice Shop, DVLA, apps LLM vulnerables). Objetivo: > 70 % de hallazgos marcados como útiles por el usuario. |
-| RNF-7 Disponibilidad | 99,5 % en MVP. |
-| RNF-8 Observabilidad | Logs, métricas y trazas de cada escaneo; alertas de errores. |
+| RNF‑1 Privacidad del código | Clonado en contenedor efímero, borrado al terminar, nunca usado para entrenar. Solo se guardan los fragmentos de los hallazgos. TLS 1.2+ y cifrado en reposo. |
+| RNF‑2 Confianza | Página de seguridad pública, DPA de RGPD, alojamiento en la UE disponible. SOC 2 Tipo I cuando los ingresos lo permitan (lo pedirán los clientes de EE. UU.). |
+| RNF‑3 Rendimiento | Escaneo de PR < 3 min; escaneo completo de repositorio mediano < 15 min. |
+| RNF‑4 Coste de IA | Coste de LLM < 15 % del precio del plan. Límites por plan, caché, escaneo incremental y modelo configurable. |
+| RNF‑5 Calidad | Conjunto de evaluación con apps vulnerables (incluido `tests/fixtures/llm_app`) y apps seguras. Objetivo: ≥ 70 % de hallazgos marcados como útiles; 0 hallazgos en el código seguro de referencia (ya cubierto por tests). |
+| RNF‑6 Disponibilidad | 99,5 % en el MVP. |
+| RNF‑7 Seguridad propia | La plataforma pasa su propio escáner en CI. Secretos de clientes (tokens de GitHub) cifrados y con rotación. |
 
-## 6. Arquitectura propuesta (MVP, barata y simple)
+## 6. Coste de IA y créditos
 
-- **Frontend:** Next.js + Tailwind.
-- **Backend / API:** Python (FastAPI) — el ecosistema de seguridad y de IA es más rico en Python.
-- **Workers de escaneo:** contenedores efímeros con los motores open source; cola de trabajos (Redis / Postgres).
-- **Base de datos:** Postgres (Supabase o Neon, con plan gratuito al inicio).
-- **LLM:** API de Claude con prompt caching; abstracción para cambiar de proveedor.
-- **Hosting:** Fly.io / Railway / Render para empezar (< 50 $/mes), migrar a AWS/GCP cuando haya clientes.
-- **Pagos:** Stripe.
+Presupuesto inicial: **1000 $ en créditos de la API de Claude**. Precios actuales por millón de tokens (entrada/salida): Opus 5.5 4 $/20 $, Sonnet 5.5 2 $/10 $, Haiku 5.5 0,10 $/0,50 $.
 
-## 7. Modelo de negocio (hipótesis a validar)
+Estimación con Opus 5.5 (modelo por defecto): ~0,05–0,10 $ por fichero con hallazgos.
+
+| Escenario | Coste aproximado | Escaneos con 1000 $ |
+|---|---|---|
+| PR típico (2–5 ficheros) | 0,10–0,50 $ | 2.000–10.000 |
+| Repo mediano completo (30 ficheros) | ~3 $ | ~330 |
+| Mismo repo con Haiku 5.5 | < 0,10 $ | > 10.000 |
+
+**Reglas:**
+- Los créditos se usan solo para desarrollo, la demo y los design partners. En producción el coste de IA lo pagan los clientes a través del precio del plan.
+- Hay que medir en real con `llm_usage` (ya se registra en cada informe) antes de fijar precios definitivos.
+- Medir calidad frente a coste con el conjunto de evaluación antes de cambiar de modelo.
+
+## 7. Modelo de negocio (hipótesis)
 
 | Plan | Precio | Incluye |
 |---|---|---|
-| Free | 0 € | 1 repo, escaneo semanal, sin auto‑fix |
-| Team | 199–399 €/mes | Hasta 20 repos, escaneo en PR, seguridad de IA, auto‑fix |
-| Business | 990+ €/mes | Repos ilimitados, informes de cumplimiento, SSO, soporte |
-| Revisión de IA asistida | 1.500–5.000 € / sistema | Informe de revisión de seguridad de IA firmado (servicio + herramienta) |
+| Free | 0 | 1 repo, escaneo semanal, sin triage con IA |
+| Starter | 49 €/mes | 3 repos, escaneo en PR, triage con IA |
+| Team | 249 €/mes | 20 repos, seguridad de IA completa, auto‑fix, informe PDF |
+| Business | 799 €/mes | Repos ilimitados, informes de cumplimiento (EU AI Act/ISO 42001), SSO, soporte prioritario |
 
-**Meta realista:** 10 clientes Team ≈ 3.000 €/mes en 6–9 meses si la validación de la Fase 0 sale bien. El servicio de revisión asistida puede generar ingresos antes.
+Precios iguales en € y $ para simplificar. **Meta:** 20 clientes Team ≈ 5.000 €/mes de ingreso recurrente.
 
-## 8. Métricas de éxito
+## 8. Hoja de ruta
 
-- Fase 0: ≥ 3 clientes de pago o cartas de intención.
-- Fase 1: ≥ 10 organizaciones activas, ≥ 3 de pago, coste LLM < 10 % de ingresos.
-- Retención mensual > 90 %.
+| Semana | Entregable |
+|---|---|
+| ✅ 0 | Núcleo del motor + motor de IA + triage con Claude + CLI + tests |
+| 1 | Probar el triage con la API real; conjunto de evaluación; reglas SAST propias |
+| 1–2 | Landing bilingüe con lista de espera y precios; reclutar 5–10 design partners entre tus contactos |
+| 2–4 | GitHub App + comentarios en PR + cola + workers en contenedores |
+| 4–6 | Panel web, Stripe, informes PDF, inglés/español |
+| 6–8 | Beta con design partners → primeros clientes de pago |
+| 8+ | Auto‑fix con PR, AST para JS/TS, más reglas de IA, GitLab |
 
-## 9. Riesgos principales
+## 9. Fuera de alcance (y por qué)
+
+- **IAST**: necesita un agente que instrumente la aplicación en ejecución, distinto para cada lenguaje (Java, Node, Python, .NET…), y que el cliente lo instale en sus entornos. Eso contradice el modelo "conectar repo y listo" y cuesta años de ingeniería. Si más adelante hay demanda de análisis dinámico, el camino natural es **DAST/red teaming de endpoints de IA** (RF‑2.7), que no requiere instalar nada.
+- **CSPM / seguridad de nube en ejecución**: es otro mercado (Wiz, Orca).
+- **On‑prem**: solo cuando un cliente enterprise lo pague.
+
+## 10. Riesgos
 
 | Riesgo | Mitigación |
 |---|---|
-| Competidores grandes añaden seguridad de IA | Velocidad, nicho (startups con IA, UE / EU AI Act), servicio cercano |
-| Falsos positivos → abandono | Triage con LLM + feedback del usuario + conjunto de evaluación propio |
-| Coste de LLM descontrolado | Límites por plan, caché, modelos pequeños primero |
-| Licencias de herramientas open source | Usar solo licencias compatibles con SaaS (MIT, Apache 2.0, LGPL) |
-| Responsabilidad legal si se escapa una vulnerabilidad | Términos de servicio con limitación de responsabilidad; seguro de RC profesional cuando haya ingresos |
-| Fundador único sin ingresos | No dejar fuentes de ingreso actuales hasta tener ingresos recurrentes; vender servicio desde el día 1 |
+| "SaaS sin hacer nada más que vender" es irreal: hay soporte, actualizar reglas, mantener la infraestructura y la propia seguridad | Automatizar al máximo: actualizaciones de motores en CI, soporte con documentación y un asistente; reservar unas horas semanales para mantenimiento |
+| Grandes competidores añaden seguridad de IA | Velocidad, foco en apps con IA, precio accesible, español/UE (EU AI Act) |
+| Falsos positivos → abandono | Triage con IA + feedback + conjunto de evaluación en CI |
+| Coste de IA descontrolado | Presupuesto por escaneo, caché, escaneo incremental, límites por plan |
+| Licencias open source | Solo MIT/Apache/LGPL; nada del registro de reglas de Semgrep |
+| Responsabilidad si se escapa una vulnerabilidad | Términos de servicio con limitación de responsabilidad; seguro de RC profesional cuando haya ingresos |
+| El proveedor de IA declina analizar código de seguridad | Respaldo automático de modelo (`fallbacks`) ya activado; modelo configurable |
+| Riesgo personal y familiar | Mantener otra fuente de ingresos hasta tener ingresos recurrentes que cubran gastos básicos |
 
-## 10. Preguntas abiertas
+## 11. Preguntas abiertas
 
-1. ¿Mercado principal: España / UE o internacional (inglés)?
-2. ¿Tienes red de contactos con CTOs o equipos de seguridad para la validación?
-3. ¿Experiencia propia: desarrollo, pentesting, consultoría de seguridad?
-4. ¿Cuánto tiempo semanal puedes dedicar y cuántos meses de margen económico tienes?
-5. ¿Los 1000 $ son créditos de API de Claude, de nube o efectivo?
+1. Nombre comercial y dominio (inglés y español).
+2. ¿Constituir sociedad en España o en EE. UU. (Stripe Atlas)? Afecta a facturación e impuestos.
+3. ¿Quiénes serán los 5–10 design partners y cuándo podemos contactarlos?
