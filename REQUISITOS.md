@@ -1,6 +1,6 @@
 # Requisitos — Plataforma SaaS de Seguridad de Código e IA
 
-> Versión 0.3 · 2026-10-13
+> Versión 0.4 · 2026-10-13
 > Cambios respecto a la 0.1: modelo 100 % SaaS self‑service, mercado internacional + España,
 > presupuesto de IA = créditos de la API de Claude, núcleo del motor ya implementado (`src/appsec_ai`).
 
@@ -90,10 +90,13 @@ Leyenda: ✅ hecho · 🔜 MVP · ⏭ posterior
 - 🔜 RF‑3.8 El usuario marca "útil / no útil" en cada hallazgo; ese feedback alimenta el conjunto de evaluación.
 
 ### M4. Plataforma SaaS
-- 🔜 RF‑4.1 Registro e inicio de sesión con GitHub; GitHub App con permisos mínimos (lectura de código, escritura solo de comentarios/checks/PRs).
-- 🔜 RF‑4.2 Escaneo en cada PR (comentario con hallazgos nuevos y check de estado) y escaneo completo programado.
+- ✅ RF‑4.1a GitHub App con permisos mínimos (contents: read, checks y pull requests: write), webhooks verificados con HMAC y gestión de instalaciones y repositorios.
+- 🔜 RF‑4.1b Inicio de sesión con GitHub en el panel web.
+- ✅ RF‑4.2 Escaneo en cada PR (check con anotaciones en las líneas, comentario único que se actualiza, solo ficheros modificados) y escaneo completo en cada push a la rama por defecto. Reintentos y botón "Re-run".
+- ✅ RF‑4.2b Cola de escaneos en Postgres con varios workers, idempotente frente a reenvíos de webhooks.
+- ✅ RF‑4.2c API REST de instalaciones, repositorios y escaneos (acceso provisional con token de administrador).
 - 🔜 RF‑4.3 Panel por organización: hallazgos por severidad, repositorio, área y tendencia; inventario de IA.
-- 🔜 RF‑4.4 Multi‑tenant con aislamiento estricto; cada escaneo en un contenedor efímero que se destruye al terminar.
+- 🟡 RF‑4.4 Multi‑tenant: datos separados por instalación; clonado seguro (sin hooks, LFS ni enlaces simbólicos, token fuera de los argumentos), workdir temporal que siempre se borra, worker sin privilegios. Falta aislar cada escaneo en su propio contenedor efímero (gVisor/Firecracker).
 - 🔜 RF‑4.5 Facturación con Stripe (planes, límites de uso, prueba gratuita de 14 días).
 - 🔜 RF‑4.6 Interfaz y correos en inglés y español.
 - 🔜 RF‑4.7 Informe PDF descargable para cuestionarios de seguridad de clientes.
@@ -145,7 +148,8 @@ Precios iguales en € y $ para simplificar. **Meta:** 20 clientes Team ≈ 5.00
 |---|---|
 | ✅ 0 | Núcleo del motor + motor de IA + triage con Claude + CLI + tests |
 | ✅ 1 | 41 reglas SAST propias; motor de IA con tree-sitter y 15 reglas; validación con código real |
-| 1 | Probar el triage con la API real; conjunto de evaluación |
+| ✅ 2 | Backend del SaaS: GitHub App, webhooks, cola, worker, checks y comentarios en PR, Docker |
+| 2 | Probar el triage con la API real; conjunto de evaluación; crear la GitHub App y desplegar |
 | 1–2 | Landing bilingüe con lista de espera y precios; reclutar 5–10 design partners entre tus contactos |
 | 2–4 | GitHub App + comentarios en PR + cola + workers en contenedores |
 | 4–6 | Panel web, Stripe, informes PDF, inglés/español |

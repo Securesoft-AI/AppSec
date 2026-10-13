@@ -23,7 +23,12 @@ jobs:
           go install github.com/zricethezav/gitleaks/v8@v8.21.2
           go install github.com/google/osv-scanner/v2/cmd/osv-scanner@v2.0.2
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
-      - run: pip install -e ".[dev,sast]"
+      - name: Instalar Semgrep aislado (sus dependencias chocan con las del servicio)
+        run: |
+          python -m venv /opt/semgrep && /opt/semgrep/bin/pip install semgrep==1.180.0
+          mkdir -p "$HOME/tools" && ln -s /opt/semgrep/bin/semgrep "$HOME/tools/semgrep"
+          echo "$HOME/tools" >> "$GITHUB_PATH"
+      - run: pip install -e ".[dev,service]"
       - run: pytest -q
       - name: Escanear el propio código
         run: appsec-ai scan src --engines ai-security,opengrep,gitleaks,osv-scanner --fail-on high

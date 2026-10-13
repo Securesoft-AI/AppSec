@@ -1,0 +1,39 @@
+# Entorno local completo: Postgres + API + worker.
+# Uso: cp .env.example .env  (y rellenar)  &&  docker compose up --build
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: appsec
+      POSTGRES_PASSWORD: appsec
+      POSTGRES_DB: appsec
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U appsec"]
+      interval: 5s
+      retries: 10
+
+  api:
+    build: .
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://appsec:appsec@db:5432/appsec
+    ports: ["8000:8000"]
+    depends_on:
+      db: {condition: service_healthy}
+
+  worker:
+    build: .
+    command: ["appsec-ai", "worker"]
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://appsec:appsec@db:5432/appsec
+    depends_on:
+      db: {condition: service_healthy}
+    # Límites para no agotar la máquina con un repositorio enorme.
+    mem_limit: 4g
+    cpus: 2
+    tmpfs: ["/work:size=2g,uid=10001"]
+
+volumes:
+  pgdata:

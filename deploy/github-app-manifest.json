@@ -1,0 +1,18 @@
+{
+  "name": "appsec-ai",
+  "url": "https://example.com",
+  "description": "Seguridad de código y de aplicaciones con IA: SAST, secretos, dependencias, IaC y OWASP Top 10 para LLM, con triage y correcciones con IA.",
+  "hook_attributes": {
+    "url": "https://TU-DOMINIO/webhooks/github",
+    "active": true
+  },
+  "redirect_url": "https://TU-DOMINIO/",
+  "public": true,
+  "default_permissions": {
+    "contents": "read",
+    "metadata": "read",
+    "pull_requests": "write",
+    "checks": "write"
+  },
+  "default_events": ["pull_request", "push", "check_run"]
+}

@@ -2,7 +2,7 @@
 
 Escáner de seguridad de código y de aplicaciones con IA. Es el núcleo del futuro SaaS: ejecuta motores open source de referencia, añade un **motor propio de seguridad de IA** (OWASP Top 10 para LLM) y usa **Claude** para descartar falsos positivos, explicar cada problema y proponer la corrección.
 
-Requisitos del producto y hoja de ruta: [`REQUISITOS.md`](REQUISITOS.md).
+Requisitos del producto y hoja de ruta: [`REQUISITOS.md`](REQUISITOS.md). Despliegue del SaaS (GitHub App, API y worker): [`docs/DESPLIEGUE.md`](docs/DESPLIEGUE.md).
 
 ## Qué analiza
 
@@ -64,11 +64,14 @@ Cada regla tiene casos positivos y negativos en `tests/rules/` (`semgrep --test`
 
 ```bash
 python3 -m venv .venv
-.venv/bin/pip install -e ".[dev,iac,sast]"
+.venv/bin/pip install -e ".[dev,service]"
 
-# Motores externos (opcionales)
+# Motores externos (opcionales). Semgrep/Opengrep y Checkov en entornos aislados:
+# sus dependencias chocan con las del servicio.
 go install github.com/zricethezav/gitleaks/v8@latest
 go install github.com/google/osv-scanner/v2/cmd/osv-scanner@latest
+python3 -m venv /opt/semgrep && /opt/semgrep/bin/pip install semgrep && ln -s /opt/semgrep/bin/semgrep /usr/local/bin/
+python3 -m venv /opt/checkov && /opt/checkov/bin/pip install checkov && ln -s /opt/checkov/bin/checkov /usr/local/bin/
 ```
 
 ## Uso
@@ -91,6 +94,16 @@ Opciones del triage con IA:
 - `--lang`: idioma de las explicaciones.
 
 Los resultados del triage se guardan en `.appsec-ai-cache/` dentro del repositorio analizado, así que reescanear sin cambios no consume tokens.
+
+## Servicio SaaS
+
+```bash
+appsec-ai serve      # API: webhooks de GitHub (/webhooks/github) y API REST (/api/...)
+appsec-ai worker     # procesa la cola de escaneos
+docker compose up    # todo junto con Postgres
+```
+
+Detalles en [`docs/DESPLIEGUE.md`](docs/DESPLIEGUE.md).
 
 ## Prueba rápida
 
@@ -118,4 +131,10 @@ src/appsec_ai/
   scanner.py             Orquestador
   report.py              Markdown, JSON y SARIF 2.1.0
   cli.py                 Línea de comandos
+  service/app.py         API (FastAPI): webhooks y API REST
+  service/webhooks.py    Instalaciones, PRs, pushes y reintentos
+  service/worker.py      Cola de escaneos: clonar, escanear, publicar en GitHub
+  service/github.py      Cliente de la GitHub App (JWT, tokens, checks, comentarios, clonado seguro)
+  service/render.py      Anotaciones del check y comentario del PR
+  service/db.py          Modelo de datos (Postgres/SQLite)
 ```
