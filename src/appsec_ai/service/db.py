@@ -72,6 +72,7 @@ class ScanStatus(str, Enum):
 class ScanKind(str, Enum):
     PULL_REQUEST = "pull_request"
     FULL = "full"
+    MANUAL = "manual"  # "Escanear ahora" desde el panel: rama por defecto, servicios elegidos
 
 
 class Scan(Base):

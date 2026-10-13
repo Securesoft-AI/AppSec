@@ -145,6 +145,10 @@ class InstallationClient:
             page += 1
         return self.request("POST", f"/repos/{repo}/issues/{number}/comments", json={"body": body}).json()["id"]
 
+    def branch_head(self, repo: str, branch: str) -> str:
+        """Último commit de una rama (para el escaneo bajo demanda)."""
+        return self.request("GET", f"/repos/{repo}/commits/{branch}").json()["sha"]
+
     # -- checks -----------------------------------------------------------------------
 
     def create_check_run(self, repo: str, head_sha: str, name: str) -> int:

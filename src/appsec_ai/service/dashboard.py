@@ -15,6 +15,7 @@ from appsec_ai.models import ScanResult, Severity
 from appsec_ai.service.db import Scan, ScanKind, ScanStatus
 
 TREND_DAYS = 30
+BRANCH_KINDS = (ScanKind.FULL.value, ScanKind.MANUAL.value)  # estado de la rama principal
 
 
 def latest_per_repo(scans: list[Scan]) -> dict[int, Scan]:
@@ -24,14 +25,14 @@ def latest_per_repo(scans: list[Scan]) -> dict[int, Scan]:
         if scan.status != ScanStatus.COMPLETED.value:
             continue
         cur = best.get(scan.repository_id)
-        if cur is None or scan.kind == ScanKind.FULL.value or cur.kind != ScanKind.FULL.value:
+        if cur is None or scan.kind in BRANCH_KINDS or cur.kind not in BRANCH_KINDS:
             best[scan.repository_id] = scan
     return best
 
 
 def trend(scans: list[Scan], today: dt.date, days: int = TREND_DAYS) -> list[dict]:
     """Hallazgos visibles al final de cada día, sumando el último escaneo completo de cada repositorio."""
-    full = sorted((s for s in scans if s.kind == ScanKind.FULL.value and s.status == ScanStatus.COMPLETED.value
+    full = sorted((s for s in scans if s.kind in BRANCH_KINDS and s.status == ScanStatus.COMPLETED.value
                    and s.finished_at), key=lambda s: s.finished_at)
     out, current, i = [], {}, 0
     start = today - dt.timedelta(days=days - 1)

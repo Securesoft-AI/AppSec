@@ -102,9 +102,10 @@ def plan_block(s: Session, repo: Repository, inst: Installation, kind: ScanKind)
         return f"plan {plan.name}: máximo {plan.max_repos} repositorios"
     if kind == ScanKind.PULL_REQUEST and not plan.pr_scans:
         return f"plan {plan.name}: sin escaneo en PRs"
-    if kind == ScanKind.FULL and plan.min_days_between_full:
+    if kind in (ScanKind.FULL, ScanKind.MANUAL) and plan.min_days_between_full:
         since = utcnow() - dt.timedelta(days=plan.min_days_between_full)
-        recent = s.scalars(select(Scan.id).where(Scan.repository_id == repo.id, Scan.kind == ScanKind.FULL.value,
+        recent = s.scalars(select(Scan.id).where(Scan.repository_id == repo.id,
+                                                 Scan.kind.in_([ScanKind.FULL.value, ScanKind.MANUAL.value]),
                                                  Scan.created_at >= since)).first()
         if recent is not None:
             return f"plan {plan.name}: un escaneo completo cada {plan.min_days_between_full} días"

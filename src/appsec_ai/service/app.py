@@ -24,13 +24,13 @@ from appsec_ai.i18n import localize
 from appsec_ai.models import ScanResult
 from appsec_ai.service import dashboard
 from appsec_ai.service.crypto import seal
-from appsec_ai.service.db import (Database, FindingFeedback, FixRequest, Installation, Repository, Scan, ScanStatus,
-                                  WaitlistEntry, utcnow)
+from appsec_ai.service.db import (Database, FindingFeedback, FixRequest, Installation, PentestRequest, Repository,
+                                  Scan, ScanKind, ScanStatus, WaitlistEntry, utcnow)
 from appsec_ai.service.github import GitHubApp, GitHubError
 from appsec_ai.service import plans
-from appsec_ai.services import PURCHASABLE, catalog
+from appsec_ai.services import PURCHASABLE, SCAN_SERVICES, catalog
 from appsec_ai.service.billing import BillingError, Stripe, apply_event, verify_event
-from appsec_ai.service.webhooks import PlanLimit, handle_event, request_fix, verify_signature
+from appsec_ai.service.webhooks import PlanLimit, enqueue, handle_event, plan_block, request_fix, verify_signature
 
 log = logging.getLogger("appsec_ai.api")
 MAX_WEBHOOK_BYTES = 25 * 1024 * 1024  # límite de GitHub para webhooks
@@ -67,6 +67,28 @@ class InstallationSettingsIn(BaseModel):
 
 class PreferencesIn(BaseModel):
     language: str = Field(pattern="^(es|en)$")
+
+
+class RepoServicesIn(BaseModel):
+    services: list[str] | None = None  # None = todos los contratados
+
+
+class ScanNowIn(BaseModel):
+    services: list[str] | None = None
+
+
+class PentestIn(BaseModel):
+    kind: str = Field(pattern="^(web|api|mobile|llm|network)$")
+    target: str = Field(min_length=3, max_length=500)
+    scope: str = Field(default="", max_length=5000)
+    preferred_dates: str = Field(default="", max_length=200)
+    contact_email: str = Field(max_length=320)
+
+
+class PentestUpdateIn(BaseModel):
+    status: str | None = Field(default=None, pattern="^(requested|scoping|scheduled|in_progress|reported|cancelled)$")
+    quote_eur: int | None = Field(default=None, ge=0)
+    report: dict | None = None  # {"summary": str, "findings": [{"title", "severity", "description", "fix"}]}
 
 
 class CheckoutIn(BaseModel):
@@ -277,7 +299,8 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
         with db.session() as s:
             rows = s.scalars(select(Repository).where(Repository.installation_id == installation_id)
                              .order_by(Repository.full_name)).all()
-            return [{"id": r.id, "full_name": r.full_name, "private": r.private, "active": r.active} for r in rows]
+            return [{"id": r.id, "full_name": r.full_name, "private": r.private, "active": r.active,
+                     "services": r.services} for r in rows]
 
     @app.get("/api/repositories/{repository_id}/scans")
     def list_scans(repository_id: int, limit: int = 50, principal: Principal = Depends(auth)):
@@ -376,6 +399,105 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
                 raise HTTPException(status_code=404, detail="instalación no encontrada")
             inst.language = data.language
             return {"id": inst.id, "language": inst.language}
+
+    # -- servicios: catálogo, elección por repositorio, escanear ahora y pentests ------------------
+
+    @app.get("/api/catalog")
+    def service_catalog(lang: str = "es"):
+        return catalog(lang)
+
+    def check_services(services: list[str] | None) -> list[str] | None:
+        if services is None:
+            return None
+        unknown = set(services) - set(SCAN_SERVICES)
+        if unknown or not services:
+            raise HTTPException(status_code=422, detail=f"servicios no válidos: {', '.join(sorted(unknown)) or '(ninguno)'}")
+        return [s for s in SCAN_SERVICES if s in services]
+
+    @app.patch("/api/repositories/{repository_id}/services")
+    def set_repo_services(repository_id: int, data: RepoServicesIn, principal: Principal = Depends(auth)):
+        """Qué servicios se aplican a este repositorio en PRs y pushes (de entre los contratados)."""
+        with db.session() as s, s.begin():
+            repo = visible_repo(s, principal, repository_id)
+            repo.services = check_services(data.services)
+            return {"id": repo.id, "services": repo.services}
+
+    @app.post("/api/repositories/{repository_id}/scans")
+    def scan_now(repository_id: int, data: ScanNowIn, principal: Principal = Depends(auth)):
+        """Escanea ahora la rama por defecto con los servicios elegidos."""
+        services = check_services(data.services)
+        with db.session() as s:
+            repo = visible_repo(s, principal, repository_id)
+            inst = s.get(Installation, repo.installation_id)
+            plan = plans.effective_plan(inst)
+            if services and not set(services) <= plan.services:
+                missing = ", ".join(sorted(set(services) - plan.services))
+                raise HTTPException(status_code=402, detail=f"servicios no contratados: {missing}")
+            reason = plan_block(s, repo, inst, ScanKind.MANUAL)
+            if reason:
+                raise HTTPException(status_code=402, detail=reason)
+            full_name, branch, installation_id = repo.full_name, repo.default_branch, repo.installation_id
+        try:
+            sha = github.installation(installation_id).branch_head(full_name, branch)
+        except GitHubError:
+            log.exception("no se pudo leer la rama %s de %s", branch, full_name)
+            raise HTTPException(status_code=502, detail="GitHub no ha devuelto la rama") from None
+        with db.session() as s, s.begin():
+            repo = s.get(Repository, repository_id)
+            scan = enqueue(s, repo, ScanKind.MANUAL, sha, f"refs/heads/{branch}")
+            if scan is None:
+                raise HTTPException(status_code=409, detail="no se ha podido encolar el escaneo")
+            if scan.status in (ScanStatus.COMPLETED.value, ScanStatus.FAILED.value):
+                # Mismo commit con otros servicios: se vuelve a lanzar.
+                scan.status, scan.attempts, scan.error, scan.check_run_id = ScanStatus.QUEUED.value, 0, "", None
+            scan.services, scan.requested_by = services, principal.login
+            return _scan_summary(scan)
+
+    @app.post("/api/installations/{installation_id}/pentests", status_code=201)
+    def request_pentest(installation_id: int, data: PentestIn, principal: Principal = Depends(auth)):
+        if not EMAIL_RE.match(data.contact_email.strip().lower()):
+            raise HTTPException(status_code=422, detail="email no válido")
+        with db.session() as s, s.begin():
+            visible_installation(s, principal, installation_id)
+            row = PentestRequest(installation_id=installation_id, requested_by=principal.login, kind=data.kind,
+                                 target=data.target.strip(), scope=data.scope.strip(),
+                                 preferred_dates=data.preferred_dates.strip(), contact_email=data.contact_email.strip())
+            s.add(row)
+            s.flush()
+            log.info("pentest %s solicitado por %s (instalación %s)", row.id, principal.login, installation_id)
+            return _pentest_summary(row, db.cipher)
+
+    @app.get("/api/installations/{installation_id}/pentests")
+    def list_pentests(installation_id: int, principal: Principal = Depends(auth)):
+        with db.session() as s:
+            visible_installation(s, principal, installation_id)
+            rows = s.scalars(select(PentestRequest).where(PentestRequest.installation_id == installation_id)
+                             .order_by(PentestRequest.id.desc())).all()
+            return [_pentest_summary(r, db.cipher) for r in rows]
+
+    @app.get("/api/admin/pentests", dependencies=[Depends(require_admin)])
+    def admin_pentests(status: str = ""):
+        with db.session() as s:
+            q = select(PentestRequest).order_by(PentestRequest.id.desc())
+            if status:
+                q = q.where(PentestRequest.status == status)
+            return [_pentest_summary(r, db.cipher) for r in s.scalars(q).all()]
+
+    @app.patch("/api/admin/pentests/{pentest_id}", dependencies=[Depends(require_admin)])
+    def update_pentest(pentest_id: int, data: PentestUpdateIn):
+        """El equipo de seguridad actualiza el estado, el presupuesto y publica el informe."""
+        with db.session() as s, s.begin():
+            row = s.get(PentestRequest, pentest_id)
+            if row is None:
+                raise HTTPException(status_code=404, detail="pentest no encontrado")
+            if data.status is not None:
+                row.status = data.status
+            if data.quote_eur is not None:
+                row.quote_eur = data.quote_eur
+            if data.report is not None:
+                row.report = seal(db.cipher, data.report)
+            row.updated_at = utcnow()
+            return _pentest_summary(row, db.cipher)
 
     # -- planes y facturación (RF-4.5) ------------------------------------------------------------
 
@@ -486,6 +608,14 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
     return app
 
 
+def _pentest_summary(row: PentestRequest, cipher=None) -> dict:
+    return {"id": row.id, "kind": row.kind, "target": row.target, "scope": row.scope,
+            "preferred_dates": row.preferred_dates, "contact_email": row.contact_email, "status": row.status,
+            "quote_eur": row.quote_eur, "requested_by": row.requested_by, "report": unseal(cipher, row.report) or {},
+            "created_at": row.created_at.isoformat() if row.created_at else None,
+            "updated_at": row.updated_at.isoformat() if row.updated_at else None}
+
+
 def _fix_summary(fix: FixRequest, cipher=None) -> dict:
     return {"id": fix.id, "scan_id": fix.scan_id, "status": fix.status, "pr_url": fix.pr_url,
             "error": fix.error, "detail": unseal(cipher, fix.detail), "requested_by": fix.requested_by}
@@ -494,6 +624,7 @@ def _fix_summary(fix: FixRequest, cipher=None) -> dict:
 def _scan_summary(scan: Scan) -> dict:
     return {
         "id": scan.id, "kind": scan.kind, "status": scan.status, "head_sha": scan.head_sha,
+        "services": scan.services, "requested_by": scan.requested_by,
         "pr_number": scan.pr_number, "summary": scan.summary, "error": scan.error,
         "created_at": scan.created_at.isoformat() if scan.created_at else None,
         "finished_at": scan.finished_at.isoformat() if scan.finished_at else None,
