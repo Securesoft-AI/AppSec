@@ -51,8 +51,8 @@ def seed(db: Database):
         if inst is None:
             inst = Installation(id=DEMO_INSTALLATION_ID, account_login=DEMO_ACCOUNT)
             s.add(inst)
-        # Siempre en prueba: la demo enseña todos los servicios.
-        inst.trial_ends_at, inst.active = utcnow() + dt.timedelta(days=3650), True
+        # Siempre en prueba (se renueva en cada arranque): la demo enseña todos los servicios.
+        inst.trial_ends_at, inst.active = utcnow() + dt.timedelta(days=30), True
         s.flush()
         for repo_id, (name, _) in DEMO_REPOS.items():
             if s.get(Repository, repo_id) is None:

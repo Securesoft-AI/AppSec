@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 import hmac
+from collections import Counter
 import json
 import logging
 import os
@@ -399,6 +400,18 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
             data = dashboard.overview(repos, results, latest_scans)
             data["trend"] = dashboard.trend(list(recent), utcnow().date())
             data["repositories_without_scans"] = sorted(repos[r] for r in set(repos) - set(latest_scans))
+            # Todos los repositorios, con los servicios elegidos en cada uno (para el panel).
+            data["all_repositories"] = [{"id": r.id, "full_name": r.full_name, "services": r.services}
+                                        for r in s.scalars(select(Repository).where(
+                                            Repository.installation_id == installation_id, Repository.active)
+                                            .order_by(Repository.full_name))]
+            # Severidad por servicio (área), sumando el último escaneo de cada repositorio.
+            by_service: dict[str, Counter] = {}
+            for res in results.values():
+                for f in res.findings:
+                    if not f.is_suppressed:
+                        by_service.setdefault(f.category.value, Counter())[f.effective_severity.value] += 1
+            data["by_service"] = {cat: dict(c) for cat, c in by_service.items()}
             return data
 
     # -- feedback útil / no útil (RF-3.8) --------------------------------------------------------

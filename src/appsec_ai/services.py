@@ -51,7 +51,7 @@ SERVICES: dict[str, Service] = {s.key: s for s in [
                    "and model output flowing into code, SQL or HTML. AI inventory and EU AI Act mapping."},
             engines=("ai-security", "opengrep"), categories=("ai",), price_month_eur=49),
     Service("pentest", {"es": "Pentest", "en": "Penetration test"},
-            {"es": "Prueba de intrusión manual de vuestro equipo de seguridad sobre web, API, móvil o aplicaciones "
+            {"es": "Prueba de intrusión manual de nuestro equipo de seguridad sobre web, API, móvil o aplicaciones "
                    "con LLM. Se solicita desde el panel y el informe queda junto al resto.",
              "en": "Manual penetration test by our security team on web, API, mobile or LLM applications. Request it "
                    "from the dashboard; the report sits next to everything else."},

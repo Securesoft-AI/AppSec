@@ -60,6 +60,8 @@ def overview(repos: dict[int, str], latest: dict[int, ScanResult], latest_scans:
         scan = latest_scans[repo_id]
         rows.append({"id": repo_id, "full_name": repos.get(repo_id, "?"), "scan_id": scan.id, "kind": scan.kind,
                      "finished_at": scan.finished_at.isoformat() if scan.finished_at else None,
+                     "scanned_services": scan.services,
+                     "by_category": dict(Counter(f.category.value for f in visible)),
                      "total": len(visible), **{s.value: counts.get(s.value, 0) for s in Severity}})
         inventory += [{**c.model_dump(), "repository": repos.get(repo_id, "?")}
                       for c in result.ai_inventory if c.kind != "llm_entrypoint"]
