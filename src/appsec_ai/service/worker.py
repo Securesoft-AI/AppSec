@@ -14,6 +14,7 @@ from appsec_ai.models import Finding, ScanResult
 from appsec_ai.scanner import apply_triage
 from appsec_ai.scanner import scan as run_scan
 from appsec_ai.service import render
+from appsec_ai.service import plans
 from appsec_ai.service.config import Settings
 from appsec_ai.service.crypto import seal, unseal
 from appsec_ai.i18n import norm, ui
@@ -92,6 +93,9 @@ class Worker:
             repo_id, repo_name, installation_id = repo.id, repo.full_name, repo.installation_id
             kind, sha, pr_number, check_id = scan.kind, scan.head_sha, scan.pr_number, scan.check_run_id
             lang = self._language(s, installation_id)
+            inst = s.get(Installation, installation_id)
+            plan = plans.effective_plan(inst)
+            ai_left = plans.ai_requests_left(inst, plan)
 
         gh = self.github.installation(installation_id)
         if not check_id:  # en un reintento se reutiliza el check ya creado
@@ -119,7 +123,8 @@ class Worker:
             result = self.scanner(src)
             if changed is not None:
                 result = filter_to_files(result, changed)
-            triager = self.triager_factory(max_req)
+            # El plan decide si hay triage con IA y cuántas peticiones quedan este mes.
+            triager = self.triager_factory(min(max_req, ai_left)) if ai_left > 0 else None
             ai_enabled = triager is not None
             if triager is not None:
                 triager.language = lang
@@ -129,6 +134,7 @@ class Worker:
                     triager.cache_dir = Path(self.settings.ai_cache_dir) / str(repo_id)
                     triager.cipher = self.db.cipher
                 apply_triage(src, result, triager)
+                self._record_ai_usage(installation_id, triager.requests)
             result.target = repo_name
         finally:
             shutil.rmtree(workdir, ignore_errors=True)
@@ -137,7 +143,7 @@ class Worker:
         title, summary, text = render.check_output(result, full_scan=changed is None, lang=lang)
         conclusion = render.conclusion(findings, self.settings.fail_on)
         gh.complete_check_run(repo_name, check_id, conclusion, title, summary, text, render.annotations(findings, lang),
-                              actions=render.fix_actions(result, lang) if ai_enabled else None)
+                              actions=render.fix_actions(result, lang) if ai_enabled and plan.fix_pr else None)
         if pr_number:
             gh.upsert_comment(repo_name, pr_number, render.pr_comment(result, lang=lang), render.COMMENT_MARKER)
 
@@ -157,15 +163,22 @@ class Worker:
             repo = s.get(Repository, scan.repository_id)
             repo_name, installation_id, attempt = repo.full_name, repo.installation_id, fix.attempts
             lang = self._language(s, installation_id)
+            inst = s.get(Installation, installation_id)
+            plan = plans.effective_plan(inst)
+            ai_left = plans.ai_requests_left(inst, plan)
             sha, pr_number = scan.head_sha, scan.pr_number
             base_branch = scan.ref.removeprefix("refs/heads/") if scan.kind == ScanKind.PULL_REQUEST.value \
                 else repo.default_branch
             raw = unseal(self.db.cipher, scan.result)
             result = ScanResult.model_validate(raw) if raw else None
 
+        if not plan.fix_pr:
+            return self._finish_fix(fix_id, f"El plan {plan.name} no incluye PRs con correcciones.")
         targets = files_to_fix(render.visible(result)) if result else {}
         if not targets:
             return self._finish_fix(fix_id, "No hay problemas confirmados por la IA que corregir.")
+        if ai_left < len(targets):
+            return self._finish_fix(fix_id, "Se ha agotado el presupuesto mensual de IA del plan.")
         triager = self.triager_factory(len(targets))
         if triager is None:
             return self._finish_fix(fix_id, "El triage con IA está desactivado en este servicio.")
@@ -187,6 +200,7 @@ class Worker:
         finally:
             shutil.rmtree(workdir, ignore_errors=True)
 
+        self._record_ai_usage(installation_id, triager.requests)
         detail = {"fixed": [fx.path for fx in fixes], "skipped": skipped, "llm_usage": dict(triager.usage)}
         if not fixes:
             if pr_number:
@@ -220,6 +234,11 @@ class Worker:
                 gh.upsert_comment(repo_name, pr_number, render.fix_comment(pr["url"], len(fixes), lang), render.FIX_MARKER)
             except GitHubError:
                 log.exception("no se pudo comentar el PR de corrección %s", pr["url"])
+
+    def _record_ai_usage(self, installation_id: int, requests: int):
+        if requests:
+            with self.db.session() as s, s.begin():
+                plans.record_ai_usage(s.get(Installation, installation_id), requests)
 
     def _finish_fix(self, fix_id: int, error: str, detail: dict | None = None):
         """Fin sin PR: un motivo definitivo, no un error transitorio que merezca reintento."""

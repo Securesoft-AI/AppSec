@@ -27,7 +27,9 @@ from appsec_ai.service.crypto import seal
 from appsec_ai.service.db import (Database, FindingFeedback, FixRequest, Installation, Repository, Scan, ScanStatus,
                                   WaitlistEntry, utcnow)
 from appsec_ai.service.github import GitHubApp, GitHubError
-from appsec_ai.service.webhooks import handle_event, request_fix, verify_signature
+from appsec_ai.service import plans
+from appsec_ai.service.billing import BillingError, Stripe, apply_event, verify_event
+from appsec_ai.service.webhooks import PlanLimit, handle_event, request_fix, verify_signature
 
 log = logging.getLogger("appsec_ai.api")
 MAX_WEBHOOK_BYTES = 25 * 1024 * 1024  # límite de GitHub para webhooks
@@ -64,6 +66,10 @@ class InstallationSettingsIn(BaseModel):
 
 class PreferencesIn(BaseModel):
     language: str = Field(pattern="^(es|en)$")
+
+
+class CheckoutIn(BaseModel):
+    plan: str = Field(pattern="^(starter|team|business)$")
 
 
 class RateLimiter:
@@ -103,7 +109,8 @@ def landing_html() -> str | None:
             + path.read_text(encoding="utf-8") + "</body></html>")
 
 
-def create_app(settings: Settings | None = None, db: Database | None = None, github: GitHubApp | None = None) -> FastAPI:
+def create_app(settings: Settings | None = None, db: Database | None = None, github: GitHubApp | None = None,
+               stripe: Stripe | None = None) -> FastAPI:
     settings = settings or get_settings()
     db = db or Database(settings.database_url, Cipher.from_keys(settings.data_encryption_key))
     if db.cipher is None:
@@ -116,6 +123,9 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
     login_enabled = bool(settings.github_client_id and settings.github_client_secret and settings.session_secret)
     secure_cookies = settings.public_url.startswith("https://")
     callback_url = f"{settings.public_url}/auth/callback"
+    if stripe is None and settings.stripe_secret_key:
+        stripe = Stripe(settings.stripe_secret_key)
+    price_to_plan = {price: plan for plan, price in settings.stripe_prices.items() if price}
     waitlist_limiter = RateLimiter(limit=5, window_seconds=600)
     landing = landing_html()
     panel = web_file("panel/index.html", "PANEL_FILE")
@@ -299,8 +309,12 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
             if not scan.result:
                 raise HTTPException(status_code=409, detail="el escaneo aún no tiene resultado")
             repo = s.get(Repository, scan.repository_id)
+            plan = plans.effective_plan(s.get(Installation, repo.installation_id))
+            if not plan.pdf_report:
+                raise HTTPException(status_code=402, detail=f"el plan {plan.name} no incluye el informe PDF")
             result = ScanResult.model_validate(unseal(db.cipher, scan.result))
-            pdf = to_pdf(result, lang=lang, target=repo.full_name, commit=scan.head_sha, generated=scan.finished_at)
+            pdf = to_pdf(result, lang=lang, target=repo.full_name, commit=scan.head_sha, generated=scan.finished_at,
+                         include_compliance=plan.compliance)
         filename = f"atalaya-{repo.full_name.replace('/', '-')}-{scan.head_sha[:7]}.pdf"
         return Response(pdf, media_type="application/pdf",
                         headers={"Content-Disposition": f'attachment; filename="{filename}"', "Cache-Control": "no-store"})
@@ -362,6 +376,68 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
             inst.language = data.language
             return {"id": inst.id, "language": inst.language}
 
+    # -- planes y facturación (RF-4.5) ------------------------------------------------------------
+
+    def visible_installation(s, principal: Principal, installation_id: int) -> Installation:
+        inst = s.get(Installation, installation_id) if principal.can_see(installation_id) else None
+        if inst is None:
+            raise HTTPException(status_code=404, detail="instalación no encontrada")
+        return inst
+
+    @app.get("/api/installations/{installation_id}/billing")
+    def billing_status(installation_id: int, principal: Principal = Depends(auth)):
+        with db.session() as s:
+            inst = visible_installation(s, principal, installation_id)
+            plan = plans.effective_plan(inst)
+            return {"plan": plan.name, "subscribed_plan": inst.plan, "status": inst.subscription_status,
+                    "trial_days_left": plans.trial_days_left(inst) if inst.plan not in plans.PAID else 0,
+                    "ai_requests_left": plans.ai_requests_left(inst, plan), "limits": plan.__dict__,
+                    "can_manage": bool(inst.stripe_customer_id), "billing_enabled": stripe is not None,
+                    "plans": {name: {"price_eur": p.price_eur, "max_repos": p.max_repos}
+                              for name, p in plans.PLANS.items()}}
+
+    @app.post("/api/installations/{installation_id}/billing/checkout")
+    def billing_checkout(installation_id: int, data: CheckoutIn, principal: Principal = Depends(auth)):
+        price = settings.stripe_prices.get(data.plan)
+        if stripe is None or not price:
+            raise HTTPException(status_code=503, detail="facturación no configurada")
+        with db.session() as s:
+            inst = visible_installation(s, principal, installation_id)
+            customer = inst.stripe_customer_id
+        try:
+            url = stripe.checkout_url(price, installation_id, customer, f"{settings.public_url}/app?billing=ok",
+                                      f"{settings.public_url}/app?billing=cancel")
+        except BillingError:
+            log.exception("Stripe Checkout falló")
+            raise HTTPException(status_code=502, detail="no se pudo iniciar el pago") from None
+        return {"url": url}
+
+    @app.post("/api/installations/{installation_id}/billing/portal")
+    def billing_portal(installation_id: int, principal: Principal = Depends(auth)):
+        if stripe is None:
+            raise HTTPException(status_code=503, detail="facturación no configurada")
+        with db.session() as s:
+            customer = visible_installation(s, principal, installation_id).stripe_customer_id
+        if not customer:
+            raise HTTPException(status_code=409, detail="esta organización aún no tiene suscripción")
+        try:
+            return {"url": stripe.portal_url(customer, f"{settings.public_url}/app")}
+        except BillingError:
+            log.exception("Stripe Portal falló")
+            raise HTTPException(status_code=502, detail="no se pudo abrir la facturación") from None
+
+    @app.post("/webhooks/stripe", include_in_schema=False)
+    async def stripe_webhook(request: Request, stripe_signature: str = Header(default="")):
+        body = await request.body()
+        try:
+            event = verify_event(body, stripe_signature, settings.stripe_webhook_secret)
+        except (BillingError, ValueError):
+            raise HTTPException(status_code=400, detail="firma no válida") from None
+        with db.session() as s, s.begin():
+            outcome = apply_event(s, event, price_to_plan)
+        log.info("stripe %s %s -> %s", event.get("id"), event.get("type"), outcome)
+        return outcome
+
     @app.patch("/api/installations/{installation_id}/settings", dependencies=[Depends(require_admin)])
     def update_installation_settings(installation_id: int, data: InstallationSettingsIn):
         """El permiso para usar el feedback en la evaluación es contractual: lo activa operaciones."""
@@ -389,7 +465,10 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
             scan = visible_scan(s, principal, scan_id)
             if scan.status != ScanStatus.COMPLETED.value:
                 raise HTTPException(status_code=409, detail="el escaneo aún no ha terminado")
-            return _fix_summary(request_fix(s, scan, principal.login), db.cipher)
+            try:
+                return _fix_summary(request_fix(s, scan, principal.login), db.cipher)
+            except PlanLimit as e:
+                raise HTTPException(status_code=402, detail=str(e)) from None
 
     @app.get("/api/scans/{scan_id}/fix-pr")
     def get_fix_pr(scan_id: int, principal: Principal = Depends(auth)):

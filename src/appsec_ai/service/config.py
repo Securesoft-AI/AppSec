@@ -38,6 +38,11 @@ class Settings:
     session_secret: str = field(default_factory=lambda: _env("SESSION_SECRET"))
     # URL pública del servicio (https://...), para el callback de OAuth y la comprobación de Origin.
     public_url: str = field(default_factory=lambda: _env("PUBLIC_URL", "http://localhost:8000").rstrip("/"))
+    # Stripe: clave secreta, secreto del webhook y precio de cada plan (price_...).
+    stripe_secret_key: str = field(default_factory=lambda: _env("STRIPE_SECRET_KEY"))
+    stripe_webhook_secret: str = field(default_factory=lambda: _env("STRIPE_WEBHOOK_SECRET"))
+    stripe_prices: dict = field(default_factory=lambda: {
+        plan: _env(f"STRIPE_PRICE_{plan.upper()}") for plan in ("starter", "team", "business")})
     # Aislamiento del escaneo: "subprocess" (por defecto) o "none" (solo para desarrollo).
     scan_sandbox: str = field(default_factory=lambda: _env("SCAN_SANDBOX", "subprocess"))
     # Envoltorio opcional del subproceso, p. ej. "bwrap --unshare-all --share-net ... --bind {src} {src}".

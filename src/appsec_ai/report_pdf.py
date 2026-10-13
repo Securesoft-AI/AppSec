@@ -68,7 +68,7 @@ TEXT = {
 
 
 def to_pdf(result: ScanResult, lang: str = "es", target: str = "", commit: str = "",
-           generated: dt.datetime | None = None) -> bytes:
+           generated: dt.datetime | None = None, include_compliance: bool = True) -> bytes:
     T = TEXT["en" if lang == "en" else "es"]
     generated = generated or dt.datetime.now(dt.timezone.utc)
     st = _styles()
@@ -98,7 +98,7 @@ def to_pdf(result: ScanResult, lang: str = "es", target: str = "", commit: str =
     if engines:
         story.append(Paragraph(f"<b>{T['engines']}:</b> {_e(engines)}", st["muted"]))
 
-    mapping = compliance.summary(findings)
+    mapping = compliance.summary(findings) if include_compliance else []
     if mapping:
         story += [Paragraph(T["mapping"], st["h2"]), Paragraph(T["mapping_note"], st["muted"]), Spacer(1, 2 * mm)]
         rows = [[T["rule"], "#", "MITRE ATLAS", "NIST AI RMF", "ISO/IEC 42001", "EU AI Act"]]

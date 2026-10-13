@@ -60,6 +60,24 @@ Cualquier plataforma que ejecute contenedores sirve: Fly.io, Railway, Render, Go
 
 Coste orientativo para empezar: 20–50 $/mes más el uso de la API de Claude.
 
+## 3b. Cobros con Stripe
+
+1. Crea en Stripe un producto por plan (Starter, Team, Business) con un precio mensual recurrente; apunta cada `price_...`.
+2. Activa el **Customer Portal** (Billing → Customer portal) para que los clientes cambien de plan, actualicen la tarjeta o cancelen.
+3. Crea un endpoint de webhook a `https://TU-DOMINIO/webhooks/stripe` con los eventos `checkout.session.completed`,
+   `customer.subscription.created`, `customer.subscription.updated` y `customer.subscription.deleted`.
+4. El plan solo cambia con esos webhooks firmados: volver de Stripe a `/app?billing=ok` no activa nada por sí solo.
+   Los eventos antiguos que lleguen tarde se ignoran.
+
+Límites por plan (en `src/appsec_ai/service/plans.py`; el presupuesto de IA es una hipótesis hasta medir el coste real):
+
+| Plan | Repos | PRs | Rama principal | IA (peticiones/mes) | Fixes | PDF | Cumplimiento |
+|---|---|---|---|---|---|---|---|
+| Free | 1 | No | Semanal | — | No | No | No |
+| Starter | 3 | Sí | Cada push | 1.000 | No | No | No |
+| Team | 20 | Sí | Cada push | 5.000 | Sí | Sí | No |
+| Business | Sin límite | Sí | Cada push | 20.000 | Sí | Sí | Sí |
+
 ## 4. Seguridad del propio servicio
 
 - Webhooks verificados con HMAC-SHA256. Sin secreto configurado se rechazan todos.
@@ -83,7 +101,6 @@ Coste orientativo para empezar: 20–50 $/mes más el uso de la API de Claude.
   - un contenedor efímero por escaneo (gVisor/Firecracker, p. ej. un Job de Kubernetes o de Cloud Run con
     `runtimeClassName: gvisor`). El subproceso ya no tiene secretos, pero comparte red y sistema de ficheros
     con el worker. Como paso intermedio, ejecuta el worker con el runtime `runsc` de gVisor;
-  - límites por plan.
 
 ## 5. Variables de entorno
 
@@ -108,3 +125,6 @@ Coste orientativo para empezar: 20–50 $/mes más el uso de la API de Claude.
 | `SCAN_SANDBOX` | No | `subprocess` (por defecto) o `none` (solo desarrollo) |
 | `SCAN_SANDBOX_CMD` | No | Envoltorio del escaneo aislado (bubblewrap, firejail...). `{src}` es el directorio del escaneo |
 | `SCAN_TIMEOUT` | No | Segundos máximos por escaneo (por defecto 900) |
+| `STRIPE_SECRET_KEY` | Sí (cobros) | Clave secreta de Stripe (`sk_live_...`; usa una *restricted key* con permisos de Checkout, Billing Portal y Subscriptions) |
+| `STRIPE_WEBHOOK_SECRET` | Sí (cobros) | Secreto del endpoint de webhook (`whsec_...`) |
+| `STRIPE_PRICE_STARTER` / `STRIPE_PRICE_TEAM` / `STRIPE_PRICE_BUSINESS` | Sí (cobros) | Id del precio mensual de cada plan (`price_...`) |

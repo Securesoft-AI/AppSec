@@ -31,6 +31,14 @@ class Installation(Base):
     eval_opt_in: Mapped[bool] = mapped_column(default=False)
     # Idioma de lo que se publica en GitHub y del triage ("es" | "en"); vacío = REPORT_LANGUAGE.
     language: Mapped[str] = mapped_column(String(5), default="")
+    # Facturación (Stripe) y uso. El plan efectivo lo calcula plans.effective_plan.
+    trial_ends_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    stripe_customer_id: Mapped[str] = mapped_column(String(100), default="", index=True)
+    stripe_subscription_id: Mapped[str] = mapped_column(String(100), default="")
+    subscription_status: Mapped[str] = mapped_column(String(30), default="")
+    usage_period: Mapped[str] = mapped_column(String(7), default="")  # AAAA-MM
+    ai_requests_used: Mapped[int] = mapped_column(Integer, default=0)
+    billing_event_at: Mapped[int] = mapped_column(BigInteger, default=0)  # último evento de Stripe aplicado
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     repositories: Mapped[list["Repository"]] = relationship(back_populates="installation", cascade="all, delete-orphan")

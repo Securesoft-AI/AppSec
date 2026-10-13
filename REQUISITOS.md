@@ -98,7 +98,7 @@ Leyenda: ✅ hecho · 🔜 MVP · ⏭ posterior
 - ✅ RF‑4.2c API REST de instalaciones, repositorios y escaneos (acceso provisional con token de administrador).
 - ✅ RF‑4.3 Panel por organización (`/app`): hallazgos por severidad, repositorio, área y tendencia de 30 días; inventario de IA; detalle por repositorio con botón de fixes.
 - 🟡 RF‑4.4 Multi‑tenant: datos separados por instalación; clonado seguro (sin hooks, LFS ni enlaces simbólicos, token fuera de los argumentos), workdir temporal que siempre se borra, worker sin privilegios. Falta aislar cada escaneo en su propio contenedor efímero (gVisor/Firecracker).
-- 🔜 RF‑4.5 Facturación con Stripe (planes, límites de uso, prueba gratuita de 14 días).
+- ✅ RF‑4.5 Facturación con Stripe (Checkout, Portal de cliente y webhooks firmados) y planes Free/Starter/Team/Business aplicados en el servidor: repositorios, escaneo en PR, escaneo semanal en Free, triage con IA con presupuesto mensual, botón de fixes, PDF y mapeo de cumplimiento. Prueba de Team de 14 días al instalar la App.
 - ✅ RF‑4.6 Inglés y español en panel, landing, informes (Markdown y PDF), checks, comentarios y PR de correcciones de GitHub, y en el triage. Cada organización elige el idioma de GitHub; cada usuario, el del panel. Los correos se traducirán cuando existan (hoy el servicio no envía ninguno).
 - ✅ RF‑4.7 Informe PDF descargable en español o inglés (panel, `GET /api/scans/{id}/report.pdf` y `appsec-ai scan --format pdf`), con metodología, mapeo a marcos de IA, inventario y detalle de hallazgos.
 - ⏭ RF‑4.8 GitLab y Bitbucket, Slack, Jira, SSO (SAML/OIDC), registros de auditoría.

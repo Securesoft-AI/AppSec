@@ -30,7 +30,9 @@ def env(tmp_path, monkeypatch):
     result = run_scan(FIXTURE, engines=["ai-security"]).model_dump(mode="json")
     now = utcnow()
     with db.session() as s, s.begin():
-        s.add_all([Installation(id=7, account_login="acme"), Installation(id=8, account_login="rival")])
+        trial = utcnow() + dt.timedelta(days=14)
+        s.add_all([Installation(id=7, account_login="acme", trial_ends_at=trial),
+                   Installation(id=8, account_login="rival", trial_ends_at=trial)])
         s.flush()
         s.add_all([Repository(id=70, installation_id=7, full_name="acme/shop"),
                    Repository(id=71, installation_id=7, full_name="acme/empty"),

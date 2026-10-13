@@ -1,4 +1,5 @@
 """Login con GitHub y aislamiento entre clientes en la API del panel."""
+import datetime as dt
 from urllib.parse import parse_qs, urlparse
 
 import httpx
@@ -10,7 +11,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 from appsec_ai.service.app import create_app  # noqa: E402
 from appsec_ai.service.auth import SESSION_COOKIE, encode_session  # noqa: E402
 from appsec_ai.service.config import Settings  # noqa: E402
-from appsec_ai.service.db import Database, Installation, Repository, Scan  # noqa: E402
+from appsec_ai.service.db import Database, Installation, Repository, Scan, utcnow  # noqa: E402
 from appsec_ai.service.github import GitHubApp  # noqa: E402
 
 PUBLIC = "https://atalaya.example.com"
@@ -45,7 +46,9 @@ def setup(tmp_path, monkeypatch):
     gh, calls = github_mock()
     client = TestClient(create_app(settings, db, github=gh), base_url=PUBLIC)
     with db.session() as s, s.begin():
-        s.add_all([Installation(id=7, account_login="acme"), Installation(id=8, account_login="rival")])
+        trial = utcnow() + dt.timedelta(days=14)
+        s.add_all([Installation(id=7, account_login="acme", trial_ends_at=trial),
+                   Installation(id=8, account_login="rival", trial_ends_at=trial)])
         s.flush()
         s.add_all([Repository(id=70, installation_id=7, full_name="acme/shop"),
                    Repository(id=80, installation_id=8, full_name="rival/secret")])

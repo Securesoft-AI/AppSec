@@ -284,7 +284,7 @@ def fix_worker(settings, db, fake, monkeypatch):
 
     claude = FakeClaude()
     return make_worker(settings, db, fake, monkeypatch,
-                       triager_factory=lambda n: Triager(client=claude, max_requests=n + 5)), claude
+                       triager_factory=lambda n: Triager(client=claude, max_requests=n)), claude
 
 
 def test_fix_button_opens_pr_with_validated_fix(env, monkeypatch):
@@ -398,6 +398,26 @@ def test_worker_publishes_in_the_installation_language(env, monkeypatch):
     comment = next(b for m, p, b in fake.calls if m == "POST" and p.endswith("/issues/5/comments"))
     assert "Files changed" in comment["body"]
     assert "Idioma de respuesta: en" in claude.calls[0]["messages"][0]["content"]  # el triage, también en inglés
+
+
+def test_ai_budget_is_enforced_and_consumed(env, monkeypatch):
+    from appsec_ai.service import plans
+
+    settings, db, client = env
+    install(client)
+    open_pr(client)
+    with db.session() as s, s.begin():
+        inst = s.get(Installation, 7)
+        inst.plan, inst.subscription_status = "starter", "active"
+        inst.usage_period, inst.ai_requests_used = plans.current_period(), 999
+    fake = FakeGitHub(["app.py"])
+    worker, claude = fix_worker(settings, db, fake, monkeypatch)
+    worker.run_once()
+    assert len(claude.calls) == 1  # solo queda 1 petición este mes: triage de app.py, sin resumen
+    with db.session() as s:
+        assert s.get(Installation, 7).ai_requests_used == 1000
+    done = [b for m, p, b in fake.calls if m == "PATCH" and "/check-runs/555" in p][-1]
+    assert "actions" not in done  # Starter no incluye el botón de fixes
 
 
 def test_check_rerun_requeues_scan(env, monkeypatch):

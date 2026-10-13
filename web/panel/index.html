@@ -89,6 +89,7 @@ tr.link { cursor: pointer; } tr.link:hover td { background: var(--accent-soft); 
 .empty { text-align: center; padding: 48px 16px; }
 .toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 8px; }
 .toolbar h2 { margin: 0 auto 0 0; }
+.plan-buttons { display: flex; gap: 8px; flex-wrap: wrap; }
 .notice { padding: 10px 12px; border-radius: 8px; background: var(--warn-soft); color: var(--ink); }
 [hidden] { display: none !important; }
 </style>
@@ -126,6 +127,12 @@ tr.link { cursor: pointer; } tr.link:hover td { background: var(--accent-soft); 
       <h2 data-i18n="by_area">Por área</h2>
       <table id="areas"></table>
     </div>
+  </section>
+
+  <section class="card" id="billing" hidden>
+    <div class="toolbar"><h2 data-i18n="plan">Plan</h2><span class="muted" id="plan-line"></span></div>
+    <p class="notice" id="billing-msg" hidden></p>
+    <div class="plan-buttons" id="plan-buttons"></div>
   </section>
 
   <section class="card" id="repos" hidden>
@@ -168,7 +175,9 @@ const I18N = {
     unscanned: "Sin escanear todavía: ", useful: "Útil", not_useful: "No útil", thanks: "Gracias, lo usaremos para mejorar.",
     verdict: "Veredicto IA", fix_requested: "Corrección en cola. Aparecerá un PR en el repositorio.",
     fix_error: "No se pudo pedir la corrección: ", full: "completo", pull_request: "PR", none: "—",
-    gh_lang: "Idioma en GitHub",
+    gh_lang: "Idioma en GitHub", plan: "Plan", trial: "prueba: {n} días", ai_left: "{n} peticiones de IA este mes",
+    upgrade: "Pasar a {p} · {e} €/mes", manage: "Gestionar facturación", billing_ok: "Pago recibido. El plan se activa en unos segundos.",
+    billing_off: "La facturación aún no está activada en este servicio.", per_month: "€/mes",
   },
   en: {
     logout: "Sign out", login_title: "Sign in with your GitHub account",
@@ -183,12 +192,14 @@ const I18N = {
     unscanned: "Not scanned yet: ", useful: "Useful", not_useful: "Not useful", thanks: "Thanks, we'll use it to improve.",
     verdict: "AI verdict", fix_requested: "Fix queued. A PR will appear in the repository.",
     fix_error: "Couldn't request the fix: ", full: "full", pull_request: "PR", none: "—",
-    gh_lang: "GitHub language",
+    gh_lang: "GitHub language", plan: "Plan", trial: "trial: {n} days", ai_left: "{n} AI requests this month",
+    upgrade: "Upgrade to {p} · €{e}/mo", manage: "Manage billing", billing_ok: "Payment received. The plan activates in a few seconds.",
+    billing_off: "Billing is not enabled on this service yet.", per_month: "€/mo",
   },
 };
 let lang = (() => { try { return localStorage.getItem("lang") || (navigator.language || "es").slice(0, 2); } catch { return "es"; } })();
 if (!I18N[lang]) lang = "es";
-const t = (k) => I18N[lang][k] ?? k;
+const t = (k, vars = {}) => (I18N[lang][k] ?? k).replace(/\{(\w+)\}/g, (_, v) => vars[v] ?? "");
 const $ = (id) => document.getElementById(id);
 
 // El DOM se construye con nodos de texto, nunca interpretando HTML: títulos, rutas y fragmentos vienen del código del cliente.
@@ -217,7 +228,7 @@ function applyLang() {
 }
 
 function showLogin() {
-  for (const id of ["overview", "charts", "repos", "inventory", "detail", "logout", "inst", "gh-lang-wrap"]) $(id).hidden = true;
+  for (const id of ["overview", "charts", "repos", "inventory", "detail", "logout", "inst", "gh-lang-wrap", "billing"]) $(id).hidden = true;
   $("login").hidden = false;
 }
 
@@ -250,6 +261,7 @@ async function loadDashboard() {
   $("detail").hidden = true;
   for (const s of ["overview", "charts", "repos", "inventory"]) $(s).hidden = false;
   $("inventory").hidden = !d.ai_inventory.length;
+  loadBilling(id);
 
   const total = SEVERITIES.reduce((a, s) => a + d.by_severity[s], 0);
   $("tiles").replaceChildren(
@@ -337,9 +349,46 @@ function renderTrend(points) {
                                el("td", { class: "num" }, totals[i])))));
 }
 
+let billing = null;
+async function loadBilling(id) {
+  billing = await api(`/api/installations/${encodeURIComponent(id)}/billing`);
+  $("billing").hidden = false;
+  const name = billing.plan.charAt(0).toUpperCase() + billing.plan.slice(1);
+  const parts = [name];
+  if (billing.trial_days_left) parts.push(t("trial", { n: billing.trial_days_left }));
+  if (billing.limits.ai_triage) parts.push(t("ai_left", { n: billing.ai_requests_left }));
+  $("plan-line").textContent = parts.join(" · ");
+  const order = ["free", "starter", "team", "business"];
+  const buttons = [];
+  if (!billing.billing_enabled) {
+    showBillingMsg(t("billing_off"));
+  } else {
+    for (const p of order.slice(1)) {
+      if (order.indexOf(p) <= order.indexOf(billing.subscribed_plan) && billing.status === "active") continue;
+      const info = billing.plans[p];
+      buttons.push(el("button", { class: p === "team" ? "btn primary" : "btn", type: "button", onclick: () => checkout(id, p) },
+        t("upgrade", { p: p.charAt(0).toUpperCase() + p.slice(1), e: info.price_eur })));
+    }
+    if (billing.can_manage) buttons.push(el("button", { class: "btn", type: "button", onclick: () => portal(id) }, t("manage")));
+  }
+  $("plan-buttons").replaceChildren(...buttons);
+  if (new URLSearchParams(location.search).get("billing") === "ok") showBillingMsg(t("billing_ok"));
+}
+async function checkout(id, plan) {
+  const r = await api(`/api/installations/${encodeURIComponent(id)}/billing/checkout`, { method: "POST", body: JSON.stringify({ plan }) });
+  location.href = r.url;
+}
+async function portal(id) {
+  const r = await api(`/api/installations/${encodeURIComponent(id)}/billing/portal`, { method: "POST" });
+  location.href = r.url;
+}
+function showBillingMsg(text) { const m = $("billing-msg"); m.textContent = text; m.hidden = false; }
+
 async function openScan(repo) {
   const scan = await api(`/api/scans/${repo.scan_id}?lang=${lang}`);
-  for (const sct of ["overview", "charts", "repos", "inventory"]) $(sct).hidden = true;
+  for (const sct of ["overview", "charts", "repos", "inventory", "billing"]) $(sct).hidden = true;
+  $("pdf").hidden = !(billing && billing.limits.pdf_report);
+  $("fix").hidden = !(billing && billing.limits.fix_pr);
   $("detail").hidden = false; $("detail-msg").hidden = true;
   $("detail-title").textContent = repo.full_name;
   $("pdf").href = `/api/scans/${repo.scan_id}/report.pdf?lang=${lang}`;
@@ -395,7 +444,7 @@ $("gh-lang").addEventListener("change", async (e) => {
 });
 let resizeTimer;
 window.addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => { if (lastTrend && !$("charts").hidden) renderTrend(lastTrend); }, 150); });
-$("back").addEventListener("click", () => { $("detail").hidden = true; for (const s of ["overview", "charts", "repos", "inventory"]) $(s).hidden = false; $("inventory").hidden = !current.ai_inventory.length; });
+$("back").addEventListener("click", () => { $("detail").hidden = true; for (const s of ["overview", "charts", "repos", "inventory", "billing"]) $(s).hidden = false; $("inventory").hidden = !current.ai_inventory.length; });
 $("logout").addEventListener("click", async () => { await api("/auth/logout", { method: "POST" }).catch(() => {}); location.href = "/app"; });
 boot();
 </script>
