@@ -15,6 +15,7 @@ from appsec_ai.scanner import apply_triage
 from appsec_ai.scanner import scan as run_scan
 from appsec_ai.service import render
 from appsec_ai.service import plans
+from appsec_ai.services import categories_for, engines_for
 from appsec_ai.service.config import Settings
 from appsec_ai.service.crypto import seal, unseal
 from appsec_ai.i18n import norm, ui
@@ -31,6 +32,13 @@ def dir_size_mb(path: Path) -> float:
     return sum(p.stat().st_size for p in path.rglob("*") if p.is_file() and not p.is_symlink()) / 1_048_576
 
 
+def filter_to_categories(result: ScanResult, categories: set[str]) -> ScanResult:
+    """Solo los hallazgos de los servicios elegidos (un motor puede servir a varios, como Opengrep)."""
+    kept = [f for f in result.findings if f.category.value in categories]
+    inventory = result.ai_inventory if "ai" in categories else []
+    return result.model_copy(update={"findings": kept, "ai_inventory": inventory})
+
+
 def filter_to_files(result: ScanResult, files: set[str]) -> ScanResult:
     """En un PR solo interesan los hallazgos de los ficheros modificados."""
     kept: list[Finding] = [f for f in result.findings if f.file in files]
@@ -45,11 +53,12 @@ class Worker:
         self.scanner = scanner or self._default_scanner
         self.triager_factory = triager_factory or self._default_triager
 
-    def _default_scanner(self, src: Path, only_files: set[str] | None = None) -> ScanResult:
+    def _default_scanner(self, src: Path, only_files: set[str] | None = None,
+                         engines: list[str] | None = None) -> ScanResult:
         if self.settings.scan_sandbox == "none":
-            return run_scan(src, only_files=only_files)
+            return run_scan(src, engines=engines, only_files=only_files)
         return sandboxed_scan(src, self.settings.scan_sandbox_cmd, timeout=self.settings.scan_timeout,
-                              only_files=only_files)
+                              only_files=only_files, engines=engines)
 
     def _language(self, s, installation_id: int) -> str:
         inst = s.get(Installation, installation_id)
@@ -98,6 +107,8 @@ class Worker:
             inst = s.get(Installation, installation_id)
             plan = plans.effective_plan(inst)
             ai_left = plans.ai_requests_left(inst, plan)
+            # Servicios de este escaneo: los pedidos (o los elegidos para el repositorio) que estén contratados.
+            selected = plans.scan_services(plan, scan.services or repo.services)
 
         gh = self.github.installation(installation_id)
         if not check_id:  # en un reintento se reutiliza el check ya creado
@@ -125,7 +136,8 @@ class Worker:
             # RF-1.8: en un PR los motores solo analizan los ficheros cambiados. Un PR enorme (la API de
             # GitHub no lista más de 3000 ficheros) se escanea entero y se filtra después.
             incremental = changed is not None and len(changed) < MAX_INCREMENTAL_FILES
-            result = self.scanner(src, only_files=changed if incremental else None)
+            result = self.scanner(src, only_files=changed if incremental else None, engines=engines_for(selected))
+            result = filter_to_categories(result, categories_for(selected))
             if changed is not None:
                 result = filter_to_files(result, changed)
             # El plan decide si hay triage con IA y cuántas peticiones quedan este mes.

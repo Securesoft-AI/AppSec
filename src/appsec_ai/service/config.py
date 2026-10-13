@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 
+from appsec_ai.services import PURCHASABLE
+
 
 def _env(name: str, default: str = "") -> str:
     return os.environ.get(name, default)
@@ -38,11 +40,12 @@ class Settings:
     session_secret: str = field(default_factory=lambda: _env("SESSION_SECRET"))
     # URL pública del servicio (https://...), para el callback de OAuth y la comprobación de Origin.
     public_url: str = field(default_factory=lambda: _env("PUBLIC_URL", "http://localhost:8000").rstrip("/"))
-    # Stripe: clave secreta, secreto del webhook y precio de cada plan (price_...).
+    # Stripe: clave secreta, secreto del webhook y precio mensual (price_...) de cada servicio y paquete:
+    # STRIPE_PRICE_SAST, STRIPE_PRICE_SCA, ..., STRIPE_PRICE_COMPLETE (ver appsec_ai/services.py).
     stripe_secret_key: str = field(default_factory=lambda: _env("STRIPE_SECRET_KEY"))
     stripe_webhook_secret: str = field(default_factory=lambda: _env("STRIPE_WEBHOOK_SECRET"))
     stripe_prices: dict = field(default_factory=lambda: {
-        plan: _env(f"STRIPE_PRICE_{plan.upper()}") for plan in ("starter", "team", "business")})
+        item: _env(f"STRIPE_PRICE_{item.upper()}") for item in PURCHASABLE})
     # Aislamiento del escaneo: "subprocess" (por defecto) o "none" (solo para desarrollo).
     scan_sandbox: str = field(default_factory=lambda: _env("SCAN_SANDBOX", "subprocess"))
     # Envoltorio opcional del subproceso, p. ej. "bwrap --unshare-all --share-net ... --bind {src} {src}".

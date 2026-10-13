@@ -1,11 +1,11 @@
-"""Planes y límites de uso (RF-4.5). Precios y contenido según REQUISITOS.md, sección 7.
+"""Qué puede usar cada organización: servicios contratados, prueba gratuita y límites (RF-4.5).
 
-Plan efectivo de una instalación:
-1. Suscripción de Stripe activa (o en periodo de gracia por impago) -> su plan.
-2. Si no, durante los 14 días siguientes a instalar la App -> prueba de Team.
-3. Si no -> Free.
+Se cobra por servicios sueltos o paquetes (ver appsec_ai/services.py). Lo que una organización puede usar:
+1. Suscripción de Stripe activa (o en periodo de gracia) -> los servicios contratados.
+2. Si no, durante los 14 días siguientes a instalar la App -> prueba con todos los servicios.
+3. Si no -> Free: Secretos y Dependencias, 1 repositorio, escaneo semanal, sin IA.
 
-El presupuesto mensual de peticiones de IA protege el margen: el coste de Claude lo paga el plan.
+El presupuesto mensual de peticiones de IA protege el margen: el coste de Claude lo paga la suscripción.
 """
 
 from __future__ import annotations
@@ -13,47 +13,56 @@ from __future__ import annotations
 import datetime as dt
 from dataclasses import dataclass
 
+from appsec_ai.services import SCAN_SERVICES, expand
+
 TRIAL_DAYS = 14
 ACTIVE_STATUSES = {"active", "trialing", "past_due"}  # past_due: Stripe reintenta el cobro unos días
+FREE_SERVICES = frozenset({"secrets", "sca"})
+PAID_MAX_REPOS = 25
+AI_REQUESTS_PER_SERVICE = 1_500  # al mes, por servicio contratado
 
 
 @dataclass(frozen=True)
 class Plan:
-    name: str
-    price_eur: int
+    name: str                      # "free" | "trial" | "paid"
+    services: frozenset[str]       # servicios de escaneo disponibles
     max_repos: int | None          # None = ilimitados
-    pr_scans: bool                 # escaneo en cada PR
+    pr_scans: bool
     min_days_between_full: int     # 7 = escaneo semanal de la rama principal
     ai_triage: bool
-    ai_requests_month: int         # presupuesto de peticiones a Claude al mes
-    fix_pr: bool                   # botón "Abrir PR con fixes"
+    ai_requests_month: int
+    fix_pr: bool
     pdf_report: bool
-    compliance: bool               # mapeo a EU AI Act / ISO 42001 / NIST / ATLAS en los informes
+    compliance: bool               # mapeo a EU AI Act / ISO 42001 / NIST / ATLAS (va con Seguridad de IA)
 
 
-PLANS = {
-    "free": Plan("free", 0, 1, False, 7, False, 0, False, False, False),
-    "starter": Plan("starter", 49, 3, True, 0, True, 1_000, False, False, False),
-    "team": Plan("team", 249, 20, True, 0, True, 5_000, True, True, False),
-    "business": Plan("business", 799, None, True, 0, True, 20_000, True, True, True),
-}
-PAID = ("starter", "team", "business")
+FREE = Plan("free", FREE_SERVICES, 1, False, 7, False, 0, False, False, False)
+
+
+def _paid(name: str, services: frozenset[str]) -> Plan:
+    return Plan(name, services, PAID_MAX_REPOS, True, 0, True, AI_REQUESTS_PER_SERVICE * len(services),
+                True, True, "ai" in services)
+
+
+TRIAL = _paid("trial", frozenset(SCAN_SERVICES))
 
 
 def effective_plan(inst, now: dt.datetime | None = None) -> Plan:
     now = now or dt.datetime.now(dt.timezone.utc)
-    if inst.plan in PAID and inst.subscription_status in ACTIVE_STATUSES:
-        return PLANS[inst.plan]
+    subscribed = frozenset(expand(inst.modules or []))
+    if subscribed and inst.subscription_status in ACTIVE_STATUSES:
+        return _paid("paid", subscribed)
     if inst.trial_ends_at and _aware(inst.trial_ends_at) > now:
-        return PLANS["team"]
-    return PLANS["free"]
+        return TRIAL
+    return FREE
 
 
 def trial_days_left(inst, now: dt.datetime | None = None) -> int:
     now = now or dt.datetime.now(dt.timezone.utc)
     if not inst.trial_ends_at:
         return 0
-    return max(0, (_aware(inst.trial_ends_at) - now).days + (1 if (_aware(inst.trial_ends_at) - now).seconds else 0))
+    left = _aware(inst.trial_ends_at) - now
+    return max(0, left.days + (1 if left.seconds else 0))
 
 
 def current_period(now: dt.datetime | None = None) -> str:
@@ -77,6 +86,12 @@ def repo_allowed(repo_id: int, active_repo_ids: list[int], plan: Plan) -> bool:
     if plan.max_repos is None:
         return True
     return repo_id in sorted(active_repo_ids)[: plan.max_repos]
+
+
+def scan_services(plan: Plan, requested=None) -> list[str]:
+    """Servicios que se ejecutan: los pedidos (o todos) que el plan incluye."""
+    wanted = set(requested) if requested else set(SCAN_SERVICES)
+    return [s for s in SCAN_SERVICES if s in wanted and s in plan.services]
 
 
 def _aware(value: dt.datetime) -> dt.datetime:

@@ -40,14 +40,16 @@ class Stripe:
             raise BillingError(f"Stripe {path} -> {r.status_code}: {r.text[:300]}")
         return r.json()
 
-    def checkout_url(self, price_id: str, installation_id: int, customer_id: str, success_url: str,
+    def checkout_url(self, price_ids: list[str], installation_id: int, customer_id: str, success_url: str,
                      cancel_url: str) -> str:
         data = {
-            "mode": "subscription", "line_items[0][price]": price_id, "line_items[0][quantity]": "1",
+            "mode": "subscription",
             "client_reference_id": str(installation_id), "metadata[installation_id]": str(installation_id),
             "subscription_data[metadata][installation_id]": str(installation_id),
             "success_url": success_url, "cancel_url": cancel_url, "allow_promotion_codes": "true",
         }
+        for i, price in enumerate(price_ids):
+            data[f"line_items[{i}][price]"], data[f"line_items[{i}][quantity]"] = price, "1"
         if customer_id:
             data["customer"] = customer_id
         return self._post("/checkout/sessions", data)["url"]
@@ -73,7 +75,7 @@ def verify_event(payload: bytes, signature_header: str, secret: str, now: float 
     return json.loads(payload)
 
 
-def apply_event(s: Session, event: dict, price_to_plan: dict[str, str]) -> dict:
+def apply_event(s: Session, event: dict, price_to_item: dict[str, str]) -> dict:
     """Aplica un evento de Stripe a la instalación correspondiente. Idempotente y tolerante al desorden."""
     kind, obj, created = event.get("type", ""), event.get("data", {}).get("object", {}), int(event.get("created", 0))
     if kind == "checkout.session.completed":
@@ -91,14 +93,16 @@ def apply_event(s: Session, event: dict, price_to_plan: dict[str, str]) -> dict:
         if created and created < (inst.billing_event_at or 0):
             return {"ignored": "evento antiguo"}  # Stripe no garantiza el orden de entrega
         items = (obj.get("items") or {}).get("data") or []
-        price = ((items[0] if items else {}).get("price") or {}).get("id", "")
+        prices = [(item.get("price") or {}).get("id", "") for item in items]
         deleted = kind.endswith(".deleted")
         inst.stripe_customer_id = obj.get("customer") or inst.stripe_customer_id
         inst.stripe_subscription_id = obj.get("id", inst.stripe_subscription_id)
         inst.subscription_status = "canceled" if deleted else obj.get("status", "")
-        inst.plan = "free" if deleted else price_to_plan.get(price, inst.plan)
+        # Servicios y paquetes contratados: cada precio de la suscripción es uno de ellos.
+        inst.modules = [] if deleted else sorted({price_to_item[p] for p in prices if p in price_to_item})
+        inst.plan = "paid" if inst.modules else "free"
         inst.billing_event_at = created
-        return {"installation": inst.id, "plan": inst.plan, "status": inst.subscription_status}
+        return {"installation": inst.id, "modules": inst.modules, "status": inst.subscription_status}
     return {"ignored": kind}
 
 

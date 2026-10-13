@@ -28,6 +28,7 @@ from appsec_ai.service.db import (Database, FindingFeedback, FixRequest, Install
                                   WaitlistEntry, utcnow)
 from appsec_ai.service.github import GitHubApp, GitHubError
 from appsec_ai.service import plans
+from appsec_ai.services import PURCHASABLE, catalog
 from appsec_ai.service.billing import BillingError, Stripe, apply_event, verify_event
 from appsec_ai.service.webhooks import PlanLimit, handle_event, request_fix, verify_signature
 
@@ -69,7 +70,7 @@ class PreferencesIn(BaseModel):
 
 
 class CheckoutIn(BaseModel):
-    plan: str = Field(pattern="^(starter|team|business)$")
+    items: list[str] = Field(min_length=1, max_length=10)  # servicios y/o paquetes
 
 
 class RateLimiter:
@@ -125,7 +126,7 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
     callback_url = f"{settings.public_url}/auth/callback"
     if stripe is None and settings.stripe_secret_key:
         stripe = Stripe(settings.stripe_secret_key)
-    price_to_plan = {price: plan for plan, price in settings.stripe_prices.items() if price}
+    price_to_item = {price: item for item, price in settings.stripe_prices.items() if price}
     waitlist_limiter = RateLimiter(limit=5, window_seconds=600)
     landing = landing_html()
     panel = web_file("panel/index.html", "PANEL_FILE")
@@ -389,23 +390,26 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
         with db.session() as s:
             inst = visible_installation(s, principal, installation_id)
             plan = plans.effective_plan(inst)
-            return {"plan": plan.name, "subscribed_plan": inst.plan, "status": inst.subscription_status,
-                    "trial_days_left": plans.trial_days_left(inst) if inst.plan not in plans.PAID else 0,
-                    "ai_requests_left": plans.ai_requests_left(inst, plan), "limits": plan.__dict__,
-                    "can_manage": bool(inst.stripe_customer_id), "billing_enabled": stripe is not None,
-                    "plans": {name: {"price_eur": p.price_eur, "max_repos": p.max_repos}
-                              for name, p in plans.PLANS.items()}}
+            limits = {**plan.__dict__, "services": sorted(plan.services)}
+            return {"plan": plan.name, "subscribed": list(inst.modules or []), "status": inst.subscription_status,
+                    "services": sorted(plan.services),
+                    "trial_days_left": plans.trial_days_left(inst) if plan.name == "trial" else 0,
+                    "ai_requests_left": plans.ai_requests_left(inst, plan), "limits": limits,
+                    "can_manage": bool(inst.stripe_customer_id), "billing_enabled": stripe is not None}
 
     @app.post("/api/installations/{installation_id}/billing/checkout")
     def billing_checkout(installation_id: int, data: CheckoutIn, principal: Principal = Depends(auth)):
-        price = settings.stripe_prices.get(data.plan)
-        if stripe is None or not price:
+        unknown = set(data.items) - set(PURCHASABLE)
+        if unknown:
+            raise HTTPException(status_code=422, detail=f"no se puede contratar: {', '.join(sorted(unknown))}")
+        prices = [settings.stripe_prices.get(i) for i in dict.fromkeys(data.items)]
+        if stripe is None or not all(prices):
             raise HTTPException(status_code=503, detail="facturación no configurada")
         with db.session() as s:
             inst = visible_installation(s, principal, installation_id)
             customer = inst.stripe_customer_id
         try:
-            url = stripe.checkout_url(price, installation_id, customer, f"{settings.public_url}/app?billing=ok",
+            url = stripe.checkout_url(prices, installation_id, customer, f"{settings.public_url}/app?billing=ok",
                                       f"{settings.public_url}/app?billing=cancel")
         except BillingError:
             log.exception("Stripe Checkout falló")
@@ -434,7 +438,7 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
         except (BillingError, ValueError):
             raise HTTPException(status_code=400, detail="firma no válida") from None
         with db.session() as s, s.begin():
-            outcome = apply_event(s, event, price_to_plan)
+            outcome = apply_event(s, event, price_to_item)
         log.info("stripe %s %s -> %s", event.get("id"), event.get("type"), outcome)
         return outcome
 

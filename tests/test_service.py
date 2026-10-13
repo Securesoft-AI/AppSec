@@ -169,12 +169,13 @@ def make_worker(settings, db, fake, monkeypatch, clone=None, triager_factory=Non
     def fake_clone(self, repo, sha, dest, timeout=300):
         shutil.copytree(FIXTURE, dest)
     monkeypatch.setattr(InstallationClient, "clone", clone or fake_clone)
-    def scanner(p, only_files=None):
+    def scanner(p, only_files=None, engines=None):
         scanner.calls.append(only_files)
+        scanner.engines.append(engines)
         return run_scan(p, engines=["ai-security"], only_files=only_files)
-    scanner.calls = []
+    scanner.calls, scanner.engines = [], []
     worker = Worker(settings, db, app, scanner=scanner, triager_factory=triager_factory)
-    worker.scan_calls = scanner.calls
+    worker.scan_calls, worker.scan_engines = scanner.calls, scanner.engines
     return worker
 
 
@@ -414,16 +415,28 @@ def test_ai_budget_is_enforced_and_consumed(env, monkeypatch):
     open_pr(client)
     with db.session() as s, s.begin():
         inst = s.get(Installation, 7)
-        inst.plan, inst.subscription_status = "starter", "active"
-        inst.usage_period, inst.ai_requests_used = plans.current_period(), 999
+        inst.modules, inst.subscription_status = ["ai"], "active"
+        inst.usage_period, inst.ai_requests_used = plans.current_period(), 1499
     fake = FakeGitHub(["app.py"])
     worker, claude = fix_worker(settings, db, fake, monkeypatch)
     worker.run_once()
     assert len(claude.calls) == 1  # solo queda 1 petición este mes: triage de app.py, sin resumen
     with db.session() as s:
-        assert s.get(Installation, 7).ai_requests_used == 1000
-    done = [b for m, p, b in fake.calls if m == "PATCH" and "/check-runs/555" in p][-1]
-    assert "actions" not in done  # Starter no incluye el botón de fixes
+        assert s.get(Installation, 7).ai_requests_used == 1500
+
+
+def test_worker_runs_only_the_services_chosen_and_paid_for(env, monkeypatch):
+    settings, db, client = env
+    install(client)
+    open_pr(client)
+    with db.session() as s, s.begin():
+        s.get(Repository, 99).services = ["secrets", "iac"]  # el usuario elige; la prueba incluye todo
+    worker = make_worker(settings, db, FakeGitHub(["app.py"]), monkeypatch)
+    worker.run_once()
+    assert worker.scan_engines == [["gitleaks", "checkov"]]
+    with db.session() as s:
+        scan = s.query(Scan).one()
+        assert scan.status == "completed" and scan.result["findings"] == []  # los hallazgos de IA se descartan
 
 
 def test_check_rerun_requeues_scan(env, monkeypatch):

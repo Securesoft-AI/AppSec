@@ -23,31 +23,47 @@ from appsec_ai.service.webhooks import handle_event  # noqa: E402
 
 PUBLIC = "https://atalaya.example.com"
 WHSEC = "whsec_test"
-PRICES = {"starter": "price_starter", "team": "price_team", "business": "price_business"}
+PRICES = {item: f"price_{item}" for item in ("sast", "sca", "secrets", "iac", "ai", "code", "supply", "complete")}
 
 
 def inst(**kw):
-    base = dict(plan="free", subscription_status="", trial_ends_at=None, usage_period="", ai_requests_used=0)
+    base = dict(modules=[], subscription_status="", trial_ends_at=None, usage_period="", ai_requests_used=0)
     return SimpleNamespace(**{**base, **kw})
 
 
-def test_effective_plan_trial_subscription_and_cancellation():
+def test_effective_plan_from_services_bundles_trial_and_cancellation():
     now = utcnow()
-    assert plans.effective_plan(inst(trial_ends_at=now + dt.timedelta(days=3))).name == "team"
-    assert plans.effective_plan(inst(trial_ends_at=now - dt.timedelta(days=1))).name == "free"
-    assert plans.effective_plan(inst(plan="starter", subscription_status="active")).name == "starter"
-    assert plans.effective_plan(inst(plan="business", subscription_status="past_due")).name == "business"
-    assert plans.effective_plan(inst(plan="team", subscription_status="canceled")).name == "free"
+    trial = plans.effective_plan(inst(trial_ends_at=now + dt.timedelta(days=3)))
+    assert trial.name == "trial" and trial.services == {"sast", "sca", "secrets", "iac", "ai"}
+    free = plans.effective_plan(inst(trial_ends_at=now - dt.timedelta(days=1)))
+    assert free.name == "free" and free.services == {"secrets", "sca"} and not free.ai_triage
+    code = plans.effective_plan(inst(modules=["code"], subscription_status="active"))
+    assert code.services == {"sast", "secrets"} and code.fix_pr and not code.compliance
+    mixed = plans.effective_plan(inst(modules=["supply", "ai"], subscription_status="past_due"))
+    assert mixed.services == {"sca", "iac", "ai"} and mixed.compliance and mixed.ai_requests_month == 4500
+    assert plans.effective_plan(inst(modules=["complete"], subscription_status="canceled")).name == "free"
     assert plans.trial_days_left(inst(trial_ends_at=now + dt.timedelta(days=13, hours=2))) == 14
+    assert plans.scan_services(code, ["sast", "iac"]) == ["sast"]  # lo no contratado no se ejecuta
+    assert plans.scan_services(code, None) == ["sast", "secrets"]
+
+
+def test_bundles_are_cheaper_than_their_services():
+    from appsec_ai.services import BUNDLES, SERVICES, catalog, engines_for
+
+    for b in BUNDLES.values():
+        assert b.price_month_eur < b.list_price_eur
+    assert not SERVICES["pentest"].is_scan and SERVICES["pentest"].price_from_eur
+    assert engines_for(["ai", "sast"]) == ["ai-security", "opengrep"]
+    assert [s["key"] for s in catalog("en")["services"]][-1] == "pentest"
 
 
 def test_monthly_ai_budget_resets_each_month():
-    i = inst(plan="starter", subscription_status="active")
-    starter = plans.PLANS["starter"]
-    plans.record_ai_usage(i, 990, now=dt.datetime(2026, 10, 30, tzinfo=dt.timezone.utc))
-    assert plans.ai_requests_left(i, starter, now=dt.datetime(2026, 10, 31, tzinfo=dt.timezone.utc)) == 10
-    assert plans.ai_requests_left(i, starter, now=dt.datetime(2026, 11, 1, tzinfo=dt.timezone.utc)) == 1000
-    assert plans.ai_requests_left(i, plans.PLANS["free"]) == 0
+    i = inst(modules=["sast"], subscription_status="active")
+    sast = plans.effective_plan(i)
+    plans.record_ai_usage(i, 1490, now=dt.datetime(2026, 10, 30, tzinfo=dt.timezone.utc))
+    assert plans.ai_requests_left(i, sast, now=dt.datetime(2026, 10, 31, tzinfo=dt.timezone.utc)) == 10
+    assert plans.ai_requests_left(i, sast, now=dt.datetime(2026, 11, 1, tzinfo=dt.timezone.utc)) == 1500
+    assert plans.ai_requests_left(i, plans.FREE) == 0
 
 
 def stripe_mock():
@@ -86,10 +102,10 @@ def signed(event: dict, secret=WHSEC, t=None):
     return body, {"Stripe-Signature": f"t={t},v1={sig}", "Content-Type": "application/json"}
 
 
-def subscription_event(kind, price="price_team", status="active", created=None, inst_id="7"):
+def subscription_event(kind, prices=("price_code", "price_ai"), status="active", created=None, inst_id="7"):
     return {"id": "evt_1", "type": kind, "created": created or int(time.time()),
             "data": {"object": {"id": "sub_1", "customer": "cus_1", "status": status, "metadata": {"installation_id": inst_id},
-                                "items": {"data": [{"price": {"id": price}}]}}}}
+                                "items": {"data": [{"price": {"id": p}} for p in prices]}}}}
 
 
 def test_free_plan_limits_repos_pr_scans_and_weekly_full_scans(env):
@@ -117,13 +133,15 @@ def test_paid_features_return_402_on_free(env):
 
 def test_checkout_portal_and_subscription_lifecycle(env):
     client, db, calls = env
-    r = client.post("/api/installations/7/billing/checkout", json={"plan": "team"}, headers={"Origin": PUBLIC})
+    r = client.post("/api/installations/7/billing/checkout", json={"items": ["code", "ai"]}, headers={"Origin": PUBLIC})
     assert r.json()["url"].startswith("https://checkout.stripe.com/")
     form = calls[-1][1]
-    assert form["line_items[0][price]"] == ["price_team"] and form["client_reference_id"] == ["7"]
-    assert form["subscription_data[metadata][installation_id]"] == ["7"]
-    assert client.post("/api/installations/8/billing/checkout", json={"plan": "team"},
+    assert form["line_items[0][price]"] == ["price_code"] and form["line_items[1][price]"] == ["price_ai"]
+    assert form["client_reference_id"] == ["7"] and form["subscription_data[metadata][installation_id]"] == ["7"]
+    assert client.post("/api/installations/8/billing/checkout", json={"items": ["sast"]},
                        headers={"Origin": PUBLIC}).status_code == 404
+    assert client.post("/api/installations/7/billing/checkout", json={"items": ["pentest"]},
+                       headers={"Origin": PUBLIC}).status_code == 422  # el pentest no es una suscripción
     assert client.post("/api/installations/7/billing/portal", headers={"Origin": PUBLIC}).status_code == 409
 
     # Volver de Stripe no cambia nada: el plan lo deciden los webhooks firmados.
@@ -133,13 +151,14 @@ def test_checkout_portal_and_subscription_lifecycle(env):
                             "data": {"object": {"client_reference_id": "7", "customer": "cus_1", "subscription": "sub_1"}}})
     assert client.post("/webhooks/stripe", content=body, headers=headers).json()["linked"]
     body, headers = signed(subscription_event("customer.subscription.created", created=t0 + 1))
-    assert client.post("/webhooks/stripe", content=body, headers=headers).json()["plan"] == "team"
+    assert client.post("/webhooks/stripe", content=body, headers=headers).json()["modules"] == ["ai", "code"]
     billing = client.get("/api/installations/7/billing").json()
-    assert billing["plan"] == "team" and billing["can_manage"] and billing["ai_requests_left"] == 5000
+    assert billing["plan"] == "paid" and billing["services"] == ["ai", "sast", "secrets"]
+    assert billing["can_manage"] and billing["ai_requests_left"] == 4500
     assert client.post("/api/installations/7/billing/portal", headers={"Origin": PUBLIC}).json()["url"].startswith("https://billing")
 
     # Un evento antiguo que llega tarde no deshace el estado.
-    body, headers = signed(subscription_event("customer.subscription.updated", price="price_starter", created=t0))
+    body, headers = signed(subscription_event("customer.subscription.updated", prices=("price_sca",), created=t0))
     assert client.post("/webhooks/stripe", content=body, headers=headers).json() == {"ignored": "evento antiguo"}
     body, headers = signed(subscription_event("customer.subscription.deleted", status="canceled", created=t0 + 5))
     client.post("/webhooks/stripe", content=body, headers=headers)
@@ -148,20 +167,20 @@ def test_checkout_portal_and_subscription_lifecycle(env):
 
 def test_stripe_webhook_rejects_forged_or_replayed_events(env):
     client, db, _ = env
-    event = subscription_event("customer.subscription.created", price="price_business")
+    event = subscription_event("customer.subscription.created", prices=("price_complete",))
     body, headers = signed(event, secret="whsec_otro")
     assert client.post("/webhooks/stripe", content=body, headers=headers).status_code == 400
     body, headers = signed(event, t=int(time.time()) - 3600)
     assert client.post("/webhooks/stripe", content=body, headers=headers).status_code == 400
     assert client.post("/webhooks/stripe", content=body).status_code == 400
     with db.session() as s:
-        assert s.get(Installation, 7).plan == "free"
+        assert s.get(Installation, 7).modules == []
 
 
-def test_new_installations_get_a_14_day_team_trial(env):
+def test_new_installations_get_a_14_day_trial_with_every_service(env):
     _, db, _ = env
     with db.session() as s, s.begin():
         handle_event(s, "installation", {"action": "created", "installation": {"id": 9, "account": {"login": "nueva"}},
                                          "repositories": []})
     with db.session() as s:
-        assert plans.effective_plan(s.get(Installation, 9)).name == "team"
+        assert plans.effective_plan(s.get(Installation, 9)).name == "trial"
