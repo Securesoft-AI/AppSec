@@ -46,6 +46,11 @@ class Settings:
     stripe_webhook_secret: str = field(default_factory=lambda: _env("STRIPE_WEBHOOK_SECRET"))
     stripe_prices: dict = field(default_factory=lambda: {
         item: _env(f"STRIPE_PRICE_{item.upper()}") for item in PURCHASABLE})
+    # Login de demostración (DEMO_LOGIN=1): usuario y contraseña fijos y una organización de ejemplo.
+    # Solo para probar el producto: nunca en un entorno con datos de clientes.
+    demo_login: bool = field(default_factory=lambda: _env("DEMO_LOGIN") == "1")
+    demo_user: str = field(default_factory=lambda: _env("DEMO_USER", "user"))
+    demo_password: str = field(default_factory=lambda: _env("DEMO_PASSWORD", "pass"))
     # Aislamiento del escaneo: "subprocess" (por defecto) o "none" (solo para desarrollo).
     scan_sandbox: str = field(default_factory=lambda: _env("SCAN_SANDBOX", "subprocess"))
     # Envoltorio opcional del subproceso, p. ej. "bwrap --unshare-all --share-net ... --bind {src} {src}".

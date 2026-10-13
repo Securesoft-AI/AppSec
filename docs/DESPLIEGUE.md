@@ -42,6 +42,20 @@ GitHub ──webhook──► API (FastAPI)  ──► Postgres (tabla scans = c
 
 ## 2. Probar en local
 
+### Demo sin GitHub (user / pass)
+
+```bash
+DEMO_LOGIN=1 appsec-ai serve --port 8000
+# http://localhost:8000/app  ->  usuario «user», contraseña «pass»
+```
+
+Crea una organización de ejemplo con tres repositorios de código deliberadamente vulnerable (`web/demo-repos/`)
+y un pentest entregado. «Escanear ahora» analiza al momento ese código con los servicios que elijas. La sesión de
+demostración solo ve esa organización. **No actives `DEMO_LOGIN` en un entorno con datos de clientes**:
+usuario y contraseña son conocidos (cámbialos con `DEMO_USER` y `DEMO_PASSWORD` si la expones).
+
+### Con la GitHub App
+
 ```bash
 cp .env.example .env   # rellenar los valores
 docker compose up --build

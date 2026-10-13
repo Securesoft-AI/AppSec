@@ -27,7 +27,7 @@ from appsec_ai.service.crypto import seal
 from appsec_ai.service.db import (Database, FindingFeedback, FixRequest, Installation, PentestRequest, Repository,
                                   Scan, ScanKind, ScanStatus, WaitlistEntry, utcnow)
 from appsec_ai.service.github import GitHubApp, GitHubError
-from appsec_ai.service import plans
+from appsec_ai.service import demo, plans
 from appsec_ai.services import PURCHASABLE, SCAN_SERVICES, catalog
 from appsec_ai.service.billing import BillingError, Stripe, apply_event, verify_event
 from appsec_ai.service.webhooks import PlanLimit, enqueue, handle_event, plan_block, request_fix, verify_signature
@@ -67,6 +67,11 @@ class InstallationSettingsIn(BaseModel):
 
 class PreferencesIn(BaseModel):
     language: str = Field(pattern="^(es|en)$")
+
+
+class DemoLoginIn(BaseModel):
+    username: str = Field(max_length=100)
+    password: str = Field(max_length=200)
 
 
 class RepoServicesIn(BaseModel):
@@ -141,6 +146,11 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
     db.create_all()
     app = FastAPI(title="appsec-ai", version="0.1.0", docs_url=None, redoc_url=None)
     admin_token = os.environ.get("ADMIN_API_TOKEN", "")
+    if settings.demo_login and not settings.session_secret:
+        import secrets as _secrets
+
+        # Demo sin configurar: secreto aleatorio por arranque (las sesiones caducan al reiniciar).
+        settings.session_secret = _secrets.token_hex(32)
     auth = Authenticator(settings.session_secret, admin_token, settings.public_url)
     github = github or GitHubApp(settings.github_app_id, settings.github_private_key, settings.github_api_url)
     login_enabled = bool(settings.github_client_id and settings.github_client_secret and settings.session_secret)
@@ -149,6 +159,11 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
     if stripe is None and settings.stripe_secret_key:
         stripe = Stripe(settings.stripe_secret_key)
     price_to_item = {price: item for item, price in settings.stripe_prices.items() if price}
+    login_limiter = RateLimiter(limit=10, window_seconds=300)
+    if settings.demo_login:
+        log.warning("MODO DEMO ACTIVO: login %s/**** con una organización de ejemplo. No usar con datos reales.",
+                    settings.demo_user)
+        demo.seed(db)
     waitlist_limiter = RateLimiter(limit=5, window_seconds=600)
     landing = landing_html()
     panel = web_file("panel/index.html", "PANEL_FILE")
@@ -205,6 +220,27 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
         resp.set_cookie(SESSION_COOKIE, encode_session(settings.session_secret, user, installations),
                         max_age=SESSION_TTL, httponly=True, secure=secure_cookies, samesite="lax")
         log.info("login de %s con %d instalaciones", user["login"], len(installations))
+        return resp
+
+    @app.get("/auth/config", include_in_schema=False)
+    def auth_config():
+        return {"github": login_enabled, "demo": settings.demo_login}
+
+    @app.post("/auth/demo", include_in_schema=False)
+    def demo_login(data: DemoLoginIn, request: Request):
+        if not settings.demo_login or not settings.session_secret:
+            raise HTTPException(status_code=404, detail="no disponible")
+        ip = request.client.host if request.client else "?"
+        if not login_limiter.allow(ip):
+            raise HTTPException(status_code=429, detail="demasiados intentos")
+        ok = hmac.compare_digest(data.username.encode(), settings.demo_user.encode()) & \
+            hmac.compare_digest(data.password.encode(), settings.demo_password.encode())
+        if not ok:
+            raise HTTPException(status_code=401, detail="usuario o contraseña incorrectos")
+        resp = JSONResponse({"status": "ok"})
+        resp.set_cookie(SESSION_COOKIE, encode_session(settings.session_secret, {"id": 0, "login": "demo"},
+                                                       [demo.DEMO_INSTALLATION_ID]),
+                        max_age=SESSION_TTL, httponly=True, secure=secure_cookies, samesite="lax")
         return resp
 
     @app.post("/auth/logout", include_in_schema=False)
@@ -433,6 +469,10 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
             if services and not set(services) <= plan.services:
                 missing = ", ".join(sorted(set(services) - plan.services))
                 raise HTTPException(status_code=402, detail=f"servicios no contratados: {missing}")
+            if demo.is_demo(repo.installation_id) and settings.demo_login:
+                # La organización de ejemplo no está en GitHub: se escanea al momento su código de ejemplo.
+                scan = demo.scan_demo_repo(db, repository_id, services or sorted(plan.services), principal.login)
+                return _scan_summary(scan)
             reason = plan_block(s, repo, inst, ScanKind.MANUAL)
             if reason:
                 raise HTTPException(status_code=402, detail=reason)
