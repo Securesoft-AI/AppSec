@@ -28,6 +28,8 @@ services:
     env_file: .env
     environment:
       DATABASE_URL: postgresql+psycopg://appsec:appsec@db:5432/appsec
+      AI_CACHE_DIR: /var/lib/appsec-ai/cache
+    volumes: [aicache:/var/lib/appsec-ai/cache]
     depends_on:
       db: {condition: service_healthy}
     # Límites para no agotar la máquina con un repositorio enorme.
@@ -37,3 +39,4 @@ services:
 
 volumes:
   pgdata:
+  aicache:

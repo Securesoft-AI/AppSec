@@ -24,6 +24,8 @@ class Settings:
     ai_effort: str = field(default_factory=lambda: _env("AI_EFFORT", "medium"))
     ai_max_requests_pr: int = field(default_factory=lambda: int(_env("AI_MAX_REQUESTS_PR", "15")))
     ai_max_requests_full: int = field(default_factory=lambda: int(_env("AI_MAX_REQUESTS_FULL", "60")))
+    # Caché del triage entre escaneos (una subcarpeta por repositorio). Vacío = sin caché.
+    ai_cache_dir: str = field(default_factory=lambda: _env("AI_CACHE_DIR"))
     language: str = field(default_factory=lambda: _env("REPORT_LANGUAGE", "es"))
     # Límites del worker.
     max_repo_mb: int = field(default_factory=lambda: int(_env("MAX_REPO_MB", "500")))

@@ -25,7 +25,8 @@ COPY src ./src
 RUN pip install ".[service]"
 
 # Sin privilegios: el worker analiza código no confiable.
-RUN useradd --create-home --uid 10001 appsec && mkdir -p /work && chown appsec /work
+RUN useradd --create-home --uid 10001 appsec && mkdir -p /work /var/lib/appsec-ai/cache \
+ && chown appsec /work /var/lib/appsec-ai/cache
 USER appsec
 ENV WORKDIR=/work SEMGREP_SEND_METRICS=off
 

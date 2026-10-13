@@ -67,7 +67,7 @@ Coste orientativo para empezar: 20–50 $/mes más el uso de la API de Claude.
   - aislar cada escaneo en su propio contenedor efímero (gVisor/Firecracker);
   - login con GitHub en el panel, que sustituya a `ADMIN_API_TOKEN`;
   - límites por plan;
-  - cifrar en reposo los resultados de los escaneos.
+  - cifrar en reposo los resultados de los escaneos y la caché del triage (`AI_CACHE_DIR`).
 
 ## 5. Variables de entorno
 
@@ -80,6 +80,7 @@ Coste orientativo para empezar: 20–50 $/mes más el uso de la API de Claude.
 | `ANTHROPIC_API_KEY` | No | Activa el triage con Claude |
 | `AI_MODEL` / `AI_EFFORT` | No | Modelo y esfuerzo del triage |
 | `AI_MAX_REQUESTS_PR` / `AI_MAX_REQUESTS_FULL` | No | Presupuesto de peticiones de IA por escaneo |
+| `AI_CACHE_DIR` | No | Directorio persistente para la caché del triage (una subcarpeta por repositorio). Sin él, cada escaneo vuelve a pagar todas las peticiones |
 | `REPORT_LANGUAGE` | No | `es` o `en` |
 | `FAIL_ON` | No | Severidad que hace fallar el check (por defecto `high`) |
 | `MAX_REPO_MB` | No | Tamaño máximo del repositorio (por defecto 500) |

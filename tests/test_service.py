@@ -149,13 +149,14 @@ class FakeGitHub:
         return httpx.Response(404, json={"message": "no simulado"})
 
 
-def make_worker(settings, db, fake, monkeypatch, clone=None):
+def make_worker(settings, db, fake, monkeypatch, clone=None, triager_factory=None):
     app = GitHubApp("123", settings.github_private_key, transport=httpx.MockTransport(fake.handler))
 
     def fake_clone(self, repo, sha, dest, timeout=300):
         shutil.copytree(FIXTURE, dest)
     monkeypatch.setattr(InstallationClient, "clone", clone or fake_clone)
-    return Worker(settings, db, app, scanner=lambda p: run_scan(p, engines=["ai-security"]))
+    return Worker(settings, db, app, scanner=lambda p: run_scan(p, engines=["ai-security"]),
+                  triager_factory=triager_factory)
 
 
 def test_worker_scans_pr_and_reports_only_changed_files(env, monkeypatch):
@@ -205,6 +206,33 @@ def test_worker_retries_then_fails_gracefully(env, monkeypatch):
     created = [c for c in fake.calls if c[0] == "POST" and c[1].endswith("/check-runs")]
     assert len(created) == 1  # los reintentos reutilizan el mismo check
     assert fake.calls[-1][2]["conclusion"] == "neutral"
+
+
+def test_worker_reuses_triage_cache_per_repository(env, monkeypatch, tmp_path):
+    from test_scanner import fake_client
+
+    from appsec_ai.triage import Triager
+
+    settings, db, client = env
+    settings.ai_cache_dir = str(tmp_path / "aicache")
+    install(client)
+    clients = []
+
+    def factory(max_requests):
+        clients.append(fake_client())
+        return Triager(client=clients[-1], max_requests=max_requests)
+
+    worker = make_worker(settings, db, FakeGitHub(["app.py"]), monkeypatch, triager_factory=factory)
+    open_pr(client, sha="a1")
+    worker.run_once()
+    open_pr(client, sha="a2", action="synchronize")
+    worker.run_once()
+
+    first, second = (len(c.beta.messages.calls) for c in clients)
+    assert first == 2 and second == 1  # triage de app.py + resumen; después solo el resumen
+    with db.session() as s:
+        repo_id = s.query(Repository).one().id
+    assert list((tmp_path / "aicache" / str(repo_id)).glob("*.json"))
 
 
 def test_check_rerun_requeues_scan(env, monkeypatch):

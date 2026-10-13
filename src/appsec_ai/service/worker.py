@@ -67,7 +67,7 @@ class Worker:
         with self.db.session() as s:
             scan = s.get(Scan, scan_id)
             repo = s.get(Repository, scan.repository_id)
-            repo_name, installation_id = repo.full_name, repo.installation_id
+            repo_id, repo_name, installation_id = repo.id, repo.full_name, repo.installation_id
             kind, sha, pr_number, check_id = scan.kind, scan.head_sha, scan.pr_number, scan.check_run_id
 
         gh = self.github.installation(installation_id)
@@ -98,6 +98,9 @@ class Worker:
                 result = filter_to_files(result, changed)
             triager = self.triager_factory(max_req)
             if triager is not None and result.findings:
+                if self.settings.ai_cache_dir:
+                    # Por repositorio: el triage contiene fragmentos del código del cliente.
+                    triager.cache_dir = Path(self.settings.ai_cache_dir) / str(repo_id)
                 apply_triage(src, result, triager)
             result.target = repo_name
         finally:
