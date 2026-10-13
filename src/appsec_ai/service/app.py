@@ -6,17 +6,73 @@ import hmac
 import json
 import logging
 import os
+import re
+import time
+from collections import defaultdict, deque
+from pathlib import Path
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi.responses import HTMLResponse, JSONResponse
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from appsec_ai.service.config import Settings, get_settings
 from appsec_ai.service.crypto import Cipher, unseal
-from appsec_ai.service.db import Database, FixRequest, Installation, Repository, Scan, ScanStatus
+from appsec_ai.service.db import Database, FixRequest, Installation, Repository, Scan, ScanStatus, WaitlistEntry
 from appsec_ai.service.webhooks import handle_event, request_fix, verify_signature
 
 log = logging.getLogger("appsec_ai.api")
 MAX_WEBHOOK_BYTES = 25 * 1024 * 1024  # límite de GitHub para webhooks
+EMAIL_RE = re.compile(r"^[^\s@<>]{1,64}@[^\s@<>]{1,255}\.[^\s@<>]{2,}$")
+
+SECURITY_HEADERS = {
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "strict-origin-when-cross-origin",
+    "Strict-Transport-Security": "max-age=31536000; includeSubDomains",
+    "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+    "Content-Security-Policy": (
+        "default-src 'self'; script-src 'self' 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; "
+        "img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
+    ),
+}
+
+
+class WaitlistIn(BaseModel):
+    email: str = Field(max_length=320)
+    company: str = Field(default="", max_length=200)
+    lang: str = Field(default="es", max_length=5)
+
+
+class RateLimiter:
+    """Límite sencillo en memoria por IP (suficiente para una landing con una instancia)."""
+
+    def __init__(self, limit: int, window_seconds: float):
+        self.limit, self.window = limit, window_seconds
+        self.hits: dict[str, deque] = defaultdict(deque)
+
+    def allow(self, key: str) -> bool:
+        now = time.monotonic()
+        q = self.hits[key]
+        while q and now - q[0] > self.window:
+            q.popleft()
+        if len(q) >= self.limit:
+            return False
+        q.append(now)
+        return True
+
+
+def landing_html() -> str | None:
+    """La landing es un fragmento HTML (también se publica como vista previa); aquí se envuelve."""
+    candidates = [Path(os.environ.get("LANDING_FILE", "")), Path.cwd() / "web/landing/index.html",
+                  Path(__file__).resolve().parents[3] / "web/landing/index.html"]
+    path = next((p for p in candidates if str(p) not in ("", ".") and p.is_file()), None)
+    if path is None:
+        return None
+    return ('<!doctype html><html lang="es"><head><meta charset="utf-8">'
+            '<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">'
+            "<script>window.ATALAYA_LIVE = true;</script></head><body>"
+            + path.read_text(encoding="utf-8") + "</body></html>")
 
 
 def create_app(settings: Settings | None = None, db: Database | None = None) -> FastAPI:
@@ -27,6 +83,15 @@ def create_app(settings: Settings | None = None, db: Database | None = None) -> 
     db.create_all()
     app = FastAPI(title="appsec-ai", version="0.1.0", docs_url=None, redoc_url=None)
     admin_token = os.environ.get("ADMIN_API_TOKEN", "")
+    waitlist_limiter = RateLimiter(limit=5, window_seconds=600)
+    landing = landing_html()
+
+    @app.middleware("http")
+    async def security_headers(request: Request, call_next):
+        response = await call_next(request)
+        for k, v in SECURITY_HEADERS.items():
+            response.headers.setdefault(k, v)
+        return response
 
     def require_admin(authorization: str = Header(default="")):
         # Provisional hasta tener login con GitHub en el panel: sin token configurado no hay acceso.
@@ -36,6 +101,35 @@ def create_app(settings: Settings | None = None, db: Database | None = None) -> 
     @app.get("/healthz")
     def healthz():
         return {"status": "ok"}
+
+    @app.get("/", response_class=HTMLResponse, include_in_schema=False)
+    def home():
+        if landing is None:
+            raise HTTPException(status_code=404, detail="landing no encontrada")
+        return HTMLResponse(landing)
+
+    @app.post("/api/waitlist")
+    def join_waitlist(data: WaitlistIn, request: Request):
+        ip = request.client.host if request.client else "?"
+        if not waitlist_limiter.allow(ip):
+            raise HTTPException(status_code=429, detail="demasiadas peticiones")
+        email = data.email.strip().lower()
+        if not EMAIL_RE.match(email):
+            raise HTTPException(status_code=422, detail="email no válido")
+        with db.session() as s, s.begin():
+            if s.scalars(select(WaitlistEntry).where(WaitlistEntry.email == email)).first():
+                return JSONResponse({"status": "already_registered"}, status_code=200)
+            s.add(WaitlistEntry(email=email, company=data.company.strip(),
+                                lang="en" if data.lang == "en" else "es"))
+        log.info("nuevo registro en la lista de espera")
+        return JSONResponse({"status": "registered"}, status_code=201)
+
+    @app.get("/api/waitlist", dependencies=[Depends(require_admin)])
+    def list_waitlist():
+        with db.session() as s:
+            rows = s.scalars(select(WaitlistEntry).order_by(WaitlistEntry.id)).all()
+            return [{"email": r.email, "company": r.company, "lang": r.lang,
+                     "created_at": r.created_at.isoformat()} for r in rows]
 
     @app.post("/webhooks/github")
     async def github_webhook(request: Request, x_github_event: str = Header(default=""),

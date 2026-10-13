@@ -150,6 +150,7 @@ Precios iguales en € y $ para simplificar. **Meta:** 20 clientes Team ≈ 5.00
 | ✅ 0 | Núcleo del motor + motor de IA + triage con Claude + CLI + tests |
 | ✅ 1 | 41 reglas SAST propias; motor de IA con tree-sitter y 15 reglas; validación con código real |
 | ✅ 2 | Backend del SaaS: GitHub App, webhooks, cola, worker, checks y comentarios en PR, Docker |
+| ✅ 2 | Landing bilingüe (nombre provisional "Atalaya") con lista de espera guardada en el backend y cabeceras de seguridad |
 | 2 | Probar el triage con la API real; conjunto de evaluación; crear la GitHub App y desplegar |
 | 1–2 | Landing bilingüe con lista de espera y precios; reclutar 5–10 design partners entre tus contactos |
 | 2–4 | GitHub App + comentarios en PR + cola + workers en contenedores |

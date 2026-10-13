@@ -100,6 +100,18 @@ class FixRequest(Base):
     finished_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class WaitlistEntry(Base):
+    """Interesados que dejan su email en la landing."""
+
+    __tablename__ = "waitlist"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    email: Mapped[str] = mapped_column(String(320), unique=True, index=True)
+    company: Mapped[str] = mapped_column(String(200), default="")
+    lang: Mapped[str] = mapped_column(String(5), default="es")
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class Database:
     def __init__(self, url: str, cipher=None):
         self.cipher = cipher  # crypto.Cipher: cifra resultados y detalles con código del cliente

@@ -22,6 +22,7 @@ RUN python -m venv /opt/checkov && /opt/checkov/bin/pip install "checkov>=3.2,<4
 WORKDIR /app
 COPY pyproject.toml README.md ./
 COPY src ./src
+COPY web ./web
 RUN pip install ".[service]"
 
 # Sin privilegios: el worker analiza código no confiable.

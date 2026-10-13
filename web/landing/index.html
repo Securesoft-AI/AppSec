@@ -1,0 +1,481 @@
+<title>Atalaya</title>
+<meta name="description" content="Seguridad de código y de aplicaciones con IA en cada pull request.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: columna editorial alineada a la izquierda; el héroe enfrenta el titular con un PR real anotado. */
+:root {
+  --paper: #f3f5f4;
+  --surface: #ffffff;
+  --ink: #12232a;
+  --muted: #55666c;
+  --line: #d5dddb;
+  --accent: #0d5f5c;
+  --accent-ink: #ffffff;
+  --accent-soft: #dcebe8;
+  --crit: #b4321f;
+  --crit-soft: #fbe6e1;
+  --warn: #9a5b00;
+  --warn-soft: #fbefd9;
+  --add: #e3f3e6;
+  --add-ink: #1d5b2c;
+  --del: #fbe6e3;
+  --code-bg: #f7f9f8;
+  --font-display: "Bricolage Grotesque", "Avenir Next", "Segoe UI", sans-serif;
+  --font-body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  --step-0: 1rem;
+  --step-1: 1.125rem;
+  --step-2: 1.5rem;
+  --step-3: 2.125rem;
+  --step-4: clamp(2.4rem, 5.2vw, 4rem);
+  --radius: 10px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #0f1719; --surface: #162124; --ink: #e4ecea; --muted: #94a6a5; --line: #29393c;
+    --accent: #5cc0b5; --accent-ink: #062321; --accent-soft: #173a38;
+    --crit: #ff8a72; --crit-soft: #3a1c17; --warn: #f2b25c; --warn-soft: #382a14;
+    --add: #15301d; --add-ink: #9be0ad; --del: #3a1d1a; --code-bg: #121c1e;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --paper: #0f1719; --surface: #162124; --ink: #e4ecea; --muted: #94a6a5; --line: #29393c;
+  --accent: #5cc0b5; --accent-ink: #062321; --accent-soft: #173a38;
+  --crit: #ff8a72; --crit-soft: #3a1c17; --warn: #f2b25c; --warn-soft: #382a14;
+  --add: #15301d; --add-ink: #9be0ad; --del: #3a1d1a; --code-bg: #121c1e;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+body {
+  background: var(--paper); color: var(--ink);
+  font-family: var(--font-body); font-size: var(--step-0); line-height: 1.6;
+  padding-inline: 20px; padding-block: 0;
+  -webkit-font-smoothing: antialiased;
+}
+.wrap { max-width: 1120px; margin-inline: auto; }
+a { color: var(--accent); }
+a:focus-visible, button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+h1, h2, h3 { font-family: var(--font-display); line-height: 1.08; text-wrap: balance; margin: 0; letter-spacing: -0.015em; }
+p { margin: 0; }
+code, .mono { font-family: var(--font-mono); font-size: 0.92em; }
+
+/* Barra superior */
+.top {
+  position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5;
+  background: color-mix(in srgb, var(--paper) 88%, transparent);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--line);
+  margin-inline: -20px; padding-inline: 20px;
+}
+.top .wrap { display: flex; align-items: center; gap: 16px; padding-block: 12px; }
+.brand { display: flex; align-items: center; gap: 10px; font-family: var(--font-display); font-weight: 800; font-size: 1.25rem; color: var(--ink); text-decoration: none; }
+.brand svg { flex: none; }
+.top nav { display: flex; gap: 20px; margin-left: auto; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+.top nav a.link { color: var(--muted); text-decoration: none; font-size: 0.95rem; }
+.top nav a.link:hover { color: var(--ink); }
+.lang { display: inline-flex; border: 1px solid var(--line); border-radius: 999px; overflow: hidden; }
+.lang button { font: 500 0.8rem var(--font-mono); background: transparent; color: var(--muted); border: 0; padding: 4px 10px; cursor: pointer; }
+.lang button[aria-pressed="true"] { background: var(--ink); color: var(--paper); }
+
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  font: 600 1rem var(--font-body); text-decoration: none; cursor: pointer;
+  background: var(--accent); color: var(--accent-ink); border: 1px solid var(--accent);
+  border-radius: 8px; padding: 12px 20px;
+}
+.btn:hover { filter: brightness(1.08); }
+.btn.ghost { background: transparent; color: var(--ink); border-color: var(--line); }
+
+/* Héroe */
+.hero { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr); gap: 56px; align-items: center; padding-block: 72px 64px; }
+.eyebrow { font: 500 0.78rem var(--font-mono); text-transform: uppercase; letter-spacing: 0.12em; color: var(--accent); }
+.hero h1 { font-size: var(--step-4); font-weight: 800; margin-top: 14px; }
+.hero h1 em { font-style: normal; color: var(--accent); }
+.hero .lede { font-size: var(--step-1); color: var(--muted); margin-top: 20px; max-width: 34rem; }
+.hero .ctas { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 28px; }
+.hero .fine { margin-top: 16px; font-size: 0.88rem; color: var(--muted); }
+
+/* PR anotado */
+.pr { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: 0 18px 40px -24px rgba(18, 35, 42, 0.35); min-width: 0; overflow: hidden; }
+.pr-head { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--line); font-size: 0.88rem; color: var(--muted); flex-wrap: wrap; }
+.pr-head strong { color: var(--ink); font-weight: 600; }
+.pill { font: 500 0.72rem var(--font-mono); border-radius: 999px; padding: 2px 8px; white-space: nowrap; }
+.pill.fail { background: var(--crit-soft); color: var(--crit); }
+.pill.ok { background: var(--add); color: var(--add-ink); }
+.diff { font-family: var(--font-mono); font-size: 0.8rem; line-height: 1.7; overflow-x: auto; background: var(--code-bg); }
+.diff .ln { display: grid; grid-template-columns: 2.6rem 1rem minmax(max-content, 1fr); white-space: pre; }
+.diff .n { color: var(--muted); text-align: right; padding-right: 8px; user-select: none; opacity: 0.7; }
+.diff .add { background: var(--add); }
+.diff .add .s { color: var(--add-ink); }
+.diff .s { color: var(--muted); }
+.note { margin: 6px 12px 10px 3.6rem; border: 1px solid var(--line); border-left: 3px solid var(--crit); background: var(--surface); border-radius: 6px; padding: 10px 12px; font-family: var(--font-body); white-space: normal; font-size: 0.84rem; line-height: 1.5; }
+.note .who { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-weight: 600; margin-bottom: 4px; }
+.note .tag { font: 500 0.7rem var(--font-mono); color: var(--crit); background: var(--crit-soft); border-radius: 4px; padding: 1px 6px; }
+.note p + p { margin-top: 6px; }
+.note .fix { color: var(--muted); }
+.note code { background: var(--code-bg); padding: 0 4px; border-radius: 3px; }
+
+/* Secciones */
+section { padding-block: 64px; border-top: 1px solid var(--line); }
+.sec-head { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: 32px 56px; align-items: end; margin-bottom: 36px; }
+.sec-head h2 { font-size: var(--step-3); font-weight: 700; }
+.sec-head p { color: var(--muted); max-width: 38rem; }
+
+/* OWASP LLM */
+.risks { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); overflow: hidden; }
+.risk { padding: 22px 22px 24px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); display: grid; gap: 8px; align-content: start; min-width: 0; }
+.risk:nth-child(3n) { border-right: 0; }
+.risk:nth-last-child(-n+3) { border-bottom: 0; }
+.risk .id { font: 500 0.78rem var(--font-mono); color: var(--accent); }
+.risk h3 { font-size: var(--step-1); font-weight: 700; }
+.risk p { color: var(--muted); font-size: 0.94rem; }
+.risk .ex { font: 400 0.78rem var(--font-mono); color: var(--ink); background: var(--code-bg); border-radius: 4px; padding: 6px 8px; overflow-x: auto; white-space: pre; }
+
+/* Cómo funciona */
+.steps { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 32px; counter-reset: step; }
+.step { display: grid; gap: 10px; align-content: start; min-width: 0; }
+.step::before { counter-increment: step; content: counter(step); font: 700 var(--step-2) var(--font-display); color: var(--accent); width: 2.6rem; height: 2.6rem; border: 2px solid var(--accent); border-radius: 50%; display: grid; place-items: center; }
+.step h3 { font-size: var(--step-1); }
+.step p { color: var(--muted); }
+
+/* Cobertura */
+.cover { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 48px; }
+.cover dl { margin: 0; display: grid; grid-template-columns: minmax(8rem, 0.5fr) minmax(0, 1fr); }
+.cover dt, .cover dd { padding-block: 14px; border-bottom: 1px solid var(--line); margin: 0; }
+.cover dt { font-weight: 600; }
+.cover dd { color: var(--muted); }
+
+/* Precios */
+.plans { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; }
+.plan { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 24px; display: grid; gap: 14px; align-content: start; min-width: 0; }
+.plan.hl { border: 2px solid var(--accent); }
+.plan .name { font: 500 0.8rem var(--font-mono); text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted); display: flex; justify-content: space-between; gap: 8px; }
+.plan .name span:last-child { color: var(--accent); }
+.plan .price { font: 800 var(--step-3) var(--font-display); font-variant-numeric: tabular-nums; }
+.plan .price small { font: 400 0.9rem var(--font-body); color: var(--muted); }
+.plan ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 8px; font-size: 0.94rem; }
+.plan li { padding-left: 1.2rem; position: relative; }
+.plan li::before { content: ""; position: absolute; left: 0; top: 0.62em; width: 0.5rem; height: 2px; background: var(--accent); }
+.plans-note { margin-top: 16px; color: var(--muted); font-size: 0.9rem; }
+
+/* FAQ */
+.faq { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 48px; }
+.faq details { border-bottom: 1px solid var(--line); padding-block: 16px; }
+.faq summary { cursor: pointer; font-weight: 600; list-style: none; display: flex; justify-content: space-between; gap: 16px; }
+.faq summary::after { content: "+"; font-family: var(--font-mono); color: var(--accent); }
+.faq details[open] summary::after { content: "−"; }
+.faq details p { color: var(--muted); margin-top: 10px; }
+
+/* Lista de espera */
+.join { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 48px; align-items: start; }
+.join h2 { font-size: var(--step-3); }
+.join .sub { color: var(--muted); margin-top: 14px; max-width: 30rem; }
+form { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 24px; display: grid; gap: 14px; }
+label { font-weight: 600; font-size: 0.9rem; display: grid; gap: 6px; }
+label span.opt { font-weight: 400; color: var(--muted); }
+input { font: 400 1rem var(--font-body); color: var(--ink); background: var(--paper); border: 1px solid var(--line); border-radius: 8px; padding: 11px 12px; width: 100%; }
+.form-msg { font-size: 0.92rem; min-height: 1.4em; }
+.form-msg.ok { color: var(--add-ink); }
+.form-msg.err { color: var(--crit); }
+
+footer { border-top: 1px solid var(--line); padding-block: 28px 40px; color: var(--muted); font-size: 0.88rem; display: flex; gap: 16px; flex-wrap: wrap; justify-content: space-between; }
+
+@media (max-width: 920px) {
+  .hero, .sec-head, .join, .cover, .faq { grid-template-columns: minmax(0, 1fr); }
+  .hero { gap: 40px; padding-block: 48px; }
+  .risks { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .risk:nth-child(3n) { border-right: 1px solid var(--line); }
+  .risk:nth-child(2n) { border-right: 0; }
+  .risk:nth-last-child(-n+3) { border-bottom: 1px solid var(--line); }
+  .risk:nth-last-child(-n+2) { border-bottom: 0; }
+  .plans { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .steps { grid-template-columns: minmax(0, 1fr); gap: 24px; }
+}
+@media (max-width: 560px) {
+  .top nav a.link { display: none; }
+  .risks, .plans { grid-template-columns: minmax(0, 1fr); }
+  .risk { border-right: 0 !important; border-bottom: 1px solid var(--line) !important; }
+  .risk:last-child { border-bottom: 0 !important; }
+  .cover dl { grid-template-columns: minmax(0, 1fr); }
+  .cover dt { border-bottom: 0; padding-bottom: 0; }
+  .note { margin-left: 12px; }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .note { animation: rise 0.6s 0.25s ease-out both; }
+  @keyframes rise { from { transform: translateY(6px); opacity: 0.4; } to { transform: none; opacity: 1; } }
+}
+</style>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="#inicio" aria-label="Atalaya">
+      <svg width="26" height="26" viewBox="0 0 26 26" aria-hidden="true"><path d="M13 2 4 6v6.5c0 5.6 3.8 9.9 9 11.5 5.2-1.6 9-5.9 9-11.5V6l-9-4Z" fill="none" stroke="var(--accent)" stroke-width="2"/><path d="m9 13 3 3 5-6" fill="none" stroke="var(--ink)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      Atalaya
+    </a>
+    <nav>
+      <a class="link" href="#riesgos" data-i18n="nav.risks">Qué detecta</a>
+      <a class="link" href="#precios" data-i18n="nav.pricing">Precios</a>
+      <a class="link" href="#faq" data-i18n="nav.faq">Preguntas</a>
+      <div class="lang" role="group" aria-label="Idioma / Language">
+        <button type="button" id="lang-es" data-lang="es" aria-pressed="true">ES</button>
+        <button type="button" id="lang-en" data-lang="en" aria-pressed="false">EN</button>
+      </div>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap" id="inicio">
+  <div class="hero">
+    <div>
+      <div class="eyebrow" data-i18n="hero.eyebrow">Seguridad de código para equipos que construyen con IA</div>
+      <h1 data-i18n-html="hero.title">Tu IA lee lo que escribe el usuario. <em>Nosotros leemos tu código.</em></h1>
+      <p class="lede" data-i18n="hero.lede">Atalaya revisa cada pull request en busca de prompt injection, agentes con demasiados permisos, secretos, dependencias vulnerables e infraestructura insegura. Te explica cada problema en tu idioma y te propone el arreglo.</p>
+      <div class="ctas">
+        <a class="btn" href="#acceso" data-i18n="hero.cta">Solicitar acceso anticipado</a>
+        <a class="btn ghost" href="#como" data-i18n="hero.cta2">Cómo funciona</a>
+      </div>
+      <p class="fine" data-i18n="hero.fine">Se instala como GitHub App en dos minutos. Sin agentes que instalar ni cambios en tu CI.</p>
+    </div>
+
+    <figure class="pr" aria-label="Ejemplo de revisión de un pull request">
+      <div class="pr-head">
+        <strong>support-bot/api.py</strong>
+        <span class="mono">#214</span>
+        <span class="pill fail" data-i18n="pr.status">atalaya · 1 crítico</span>
+      </div>
+      <div class="diff" role="presentation">
+        <div class="ln"><span class="n">31</span><span class="s"> </span><span>@app.post("/ask")</span></div>
+        <div class="ln"><span class="n">32</span><span class="s"> </span><span>def ask(body: Question):</span></div>
+        <div class="ln add"><span class="n">33</span><span class="s">+</span><span>    msg = client.messages.create(</span></div>
+        <div class="ln add"><span class="n">34</span><span class="s">+</span><span>        system=f"Responde a {body.user}",</span></div>
+        <div class="ln add"><span class="n">35</span><span class="s">+</span><span>        messages=[{"role": "user", "content": body.q}],</span></div>
+        <div class="ln add"><span class="n">36</span><span class="s">+</span><span>    )</span></div>
+        <div class="ln add"><span class="n">37</span><span class="s">+</span><span>    sql = msg.content[0].text</span></div>
+        <div class="ln add"><span class="n">38</span><span class="s">+</span><span>    return db.execute(sql).fetchall()</span></div>
+        <div class="note">
+          <div class="who">Atalaya <span class="tag">CRITICAL · OWASP LLM05</span></div>
+          <p data-i18n-html="pr.note">La respuesta del modelo se ejecuta como SQL. Un usuario puede pedirle al asistente <code>DROP TABLE customers</code> y la base de datos obedecerá.</p>
+          <p class="fix" data-i18n-html="pr.fix">Corrección: genera solo parámetros con el modelo, usa consultas predefinidas y un usuario de base de datos de solo lectura.</p>
+        </div>
+      </div>
+    </figure>
+  </div>
+
+  <section id="riesgos">
+    <div class="sec-head">
+      <h2 data-i18n="risks.title">Los fallos que traen los LLM, encontrados antes del merge</h2>
+      <p data-i18n="risks.lede">Las herramientas de análisis clásicas no saben qué es un prompt. Atalaya sigue el recorrido de los datos de la entrada del usuario al modelo, y de la respuesta del modelo a tu base de datos, tu shell o tu HTML. Cada hallazgo se clasifica según el OWASP Top 10 para aplicaciones LLM.</p>
+    </div>
+    <div class="risks">
+      <div class="risk"><span class="id">LLM01</span><h3 data-i18n="r1.t">Prompt injection</h3><p data-i18n="r1.d">Entrada del usuario o documentos externos mezclados con las instrucciones del modelo.</p><code class="ex">system=f"…{request.json['q']}"</code></div>
+      <div class="risk"><span class="id">LLM05</span><h3 data-i18n="r2.t">Salidas que se ejecutan</h3><p data-i18n="r2.d">Respuestas del modelo que acaban en eval, SQL, peticiones HTTP, rutas de fichero o innerHTML.</p><code class="ex">el.innerHTML = completion.text</code></div>
+      <div class="risk"><span class="id">LLM06</span><h3 data-i18n="r3.t">Agentes con demasiado poder</h3><p data-i18n="r3.d">Herramientas de agentes y servidores MCP que borran, pagan o ejecutan comandos sin confirmación.</p><code class="ex">@mcp.tool() def delete_file(…)</code></div>
+      <div class="risk"><span class="id">LLM07</span><h3 data-i18n="r4.t">Secretos en el prompt</h3><p data-i18n="r4.d">Credenciales dentro del prompt de sistema, que se pueden extraer con una sola pregunta.</p><code class="ex">"…la contraseña es Pr0d…"</code></div>
+      <div class="risk"><span class="id">LLM02</span><h3 data-i18n="r5.t">Datos que se filtran</h3><p data-i18n="r5.d">Prompts y respuestas con datos personales escritos en los logs.</p><code class="ex">logger.info(answer)</code></div>
+      <div class="risk"><span class="id">LLM10</span><h3 data-i18n="r6.t">Consumo sin límite</h3><p data-i18n="r6.d">Llamadas sin límite de tokens y agentes sin límite de iteraciones: la factura la decide el atacante.</p><code class="ex">max_iterations=None</code></div>
+    </div>
+  </section>
+
+  <section id="como">
+    <div class="sec-head">
+      <h2 data-i18n="how.title">Del pull request al arreglo</h2>
+      <p data-i18n="how.lede">Sin configuración. Atalaya trabaja donde ya revisas el código.</p>
+    </div>
+    <div class="steps">
+      <div class="step"><h3 data-i18n="s1.t">Instala la GitHub App</h3><p data-i18n="s1.d">Elige los repositorios. Atalaya solo pide permiso de lectura del código y de escritura en comentarios y checks.</p></div>
+      <div class="step"><h3 data-i18n="s2.t">Abre un pull request</h3><p data-i18n="s2.d">En unos minutos aparece un check con cada problema anotado en su línea, solo en los ficheros que has tocado.</p></div>
+      <div class="step"><h3 data-i18n="s3.t">Arréglalo con contexto</h3><p data-i18n="s3.d">La IA descarta los falsos positivos, explica el riesgo real en tu idioma y propone el código corregido.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <h2 data-i18n="cov.title">Y todo lo demás que un equipo de seguridad revisaría</h2>
+      <p data-i18n="cov.lede">Un solo informe, sin duplicados entre herramientas, priorizado por el riesgo real en tu código.</p>
+    </div>
+    <div class="cover">
+      <dl>
+        <dt data-i18n="c1.t">Código</dt><dd data-i18n="c1.d">Inyección SQL y de comandos, SSRF, XSS, path traversal, deserialización. Python, JavaScript, TypeScript, Java y Go.</dd>
+        <dt data-i18n="c2.t">Secretos</dt><dd data-i18n="c2.d">Claves y tokens subidos al repositorio. Nunca guardamos su valor.</dd>
+      </dl>
+      <dl>
+        <dt data-i18n="c3.t">Dependencias</dt><dd data-i18n="c3.d">Librerías con vulnerabilidades conocidas (CVE), con la versión que las corrige.</dd>
+        <dt data-i18n="c4.t">Infraestructura</dt><dd data-i18n="c4.d">Terraform, Kubernetes, Dockerfile y CloudFormation: buckets públicos, puertos abiertos, cifrado ausente.</dd>
+      </dl>
+    </div>
+  </section>
+
+  <section id="precios">
+    <div class="sec-head">
+      <h2 data-i18n="pr.title">Precios claros, sin llamada comercial</h2>
+      <p data-i18n="pr.lede">Pagas por equipo, no por desarrollador. Cancela cuando quieras.</p>
+    </div>
+    <div class="plans">
+      <div class="plan"><div class="name"><span>Free</span></div><div class="price">0 €</div>
+        <ul><li data-i18n="p1.a">1 repositorio</li><li data-i18n="p1.b">Escaneo semanal</li><li data-i18n="p1.c">Sin análisis con IA</li></ul></div>
+      <div class="plan"><div class="name"><span>Starter</span></div><div class="price">49 € <small data-i18n="p.mo">/ mes</small></div>
+        <ul><li data-i18n="p2.a">3 repositorios</li><li data-i18n="p2.b">Revisión de cada pull request</li><li data-i18n="p2.c">Análisis y explicación con IA</li></ul></div>
+      <div class="plan hl"><div class="name"><span>Team</span><span data-i18n="p.pop">Recomendado</span></div><div class="price">249 € <small data-i18n="p.mo">/ mes</small></div>
+        <ul><li data-i18n="p3.a">20 repositorios</li><li data-i18n="p3.b">Seguridad de IA completa</li><li data-i18n="p3.c">Correcciones propuestas</li><li data-i18n="p3.d">Informe PDF para tus clientes</li></ul></div>
+      <div class="plan"><div class="name"><span>Business</span></div><div class="price">799 € <small data-i18n="p.mo">/ mes</small></div>
+        <ul><li data-i18n="p4.a">Repositorios ilimitados</li><li data-i18n="p4.b">Informes EU AI Act e ISO 42001</li><li data-i18n="p4.c">SSO y soporte prioritario</li></ul></div>
+    </div>
+    <p class="plans-note" data-i18n="pr.note2">Los primeros equipos de la lista de espera tienen 60 días gratis del plan Team.</p>
+  </section>
+
+  <section id="faq">
+    <div class="sec-head"><h2 data-i18n="faq.title">Preguntas frecuentes</h2></div>
+    <div class="faq">
+      <div>
+        <details><summary data-i18n="q1">¿Guardáis mi código?</summary><p data-i18n="a1">No. Cada análisis descarga un único commit en un entorno temporal que se borra al terminar. Solo conservamos los fragmentos de los hallazgos.</p></details>
+        <details><summary data-i18n="q2">¿Usáis mi código para entrenar modelos?</summary><p data-i18n="a2">No. Ni nosotros ni nuestro proveedor de IA lo usamos para entrenar.</p></details>
+        <details><summary data-i18n="q3">¿Qué permisos pide la GitHub App?</summary><p data-i18n="a3">Lectura del código y de los metadatos, y escritura en checks y comentarios de pull requests. Nada más.</p></details>
+      </div>
+      <div>
+        <details><summary data-i18n="q4">¿Funciona si no uso IA en mi producto?</summary><p data-i18n="a4">Sí. El análisis de código, secretos, dependencias e infraestructura funciona en cualquier proyecto; la parte de IA se activa sola cuando detecta SDKs de LLM o agentes.</p></details>
+        <details><summary data-i18n="q5">¿Y si un hallazgo es un falso positivo?</summary><p data-i18n="a5">La IA descarta la mayoría antes de mostrártelos. Para el resto, añade el comentario <code>appsec-ai: ignore</code> en la línea y no volverá a aparecer.</p></details>
+        <details><summary data-i18n="q6">¿Dónde se alojan los datos?</summary><p data-i18n="a6">En la Unión Europea. Firmamos un acuerdo de tratamiento de datos (DPA) conforme al RGPD.</p></details>
+      </div>
+    </div>
+  </section>
+
+  <section id="acceso">
+    <div class="join">
+      <div>
+        <h2 data-i18n="join.title">Revisa tu próximo pull request con Atalaya</h2>
+        <p class="sub" data-i18n="join.lede">Estamos dando acceso por orden de llegada. Te escribimos con las instrucciones de instalación.</p>
+      </div>
+      <form id="waitlist" novalidate>
+        <label for="wl-email"><span data-i18n="f.email">Email de trabajo</span>
+          <input id="wl-email" name="email" type="email" autocomplete="email" required placeholder="tu@empresa.com"></label>
+        <label for="wl-company"><span><span data-i18n="f.company">Empresa</span> <span class="opt" data-i18n="f.opt">(opcional)</span></span>
+          <input id="wl-company" name="company" type="text" autocomplete="organization" maxlength="200"></label>
+        <button class="btn" type="submit" id="wl-submit" data-i18n="f.submit">Unirme a la lista</button>
+        <p class="form-msg" id="wl-msg" role="status" aria-live="polite"></p>
+      </form>
+    </div>
+  </section>
+
+  <footer>
+    <span>© 2026 Atalaya</span>
+    <span data-i18n="foot">Hecho en España para equipos de todo el mundo.</span>
+  </footer>
+</main>
+
+<script>
+(function () {
+  var EN = {
+    "nav.risks": "What it finds", "nav.pricing": "Pricing", "nav.faq": "FAQ",
+    "hero.eyebrow": "Code security for teams building with AI",
+    "hero.title": "Your AI reads what users type. <em>We read your code.</em>",
+    "hero.lede": "Atalaya reviews every pull request for prompt injection, over-privileged agents, secrets, vulnerable dependencies and insecure infrastructure. It explains each issue in plain language and proposes the fix.",
+    "hero.cta": "Request early access", "hero.cta2": "How it works",
+    "hero.fine": "Installs as a GitHub App in two minutes. No agents to install, no CI changes.",
+    "pr.status": "atalaya · 1 critical",
+    "pr.note": "The model's answer runs as SQL. A user can ask the assistant for <code>DROP TABLE customers</code> and the database will comply.",
+    "pr.fix": "Fix: let the model produce parameters only, use predefined queries and a read-only database user.",
+    "risks.title": "The bugs LLMs bring, caught before the merge",
+    "risks.lede": "Classic scanners don't know what a prompt is. Atalaya follows the data from user input to the model, and from the model's answer to your database, shell or HTML. Every finding maps to the OWASP Top 10 for LLM Applications.",
+    "r1.t": "Prompt injection", "r1.d": "User input or external documents mixed into the model's instructions.",
+    "r2.t": "Outputs that execute", "r2.d": "Model answers that end up in eval, SQL, HTTP requests, file paths or innerHTML.",
+    "r3.t": "Over-powered agents", "r3.d": "Agent tools and MCP servers that delete, pay or run commands without confirmation.",
+    "r4.t": "Secrets in the prompt", "r4.d": "Credentials inside the system prompt, one question away from being extracted.",
+    "r5.t": "Leaking data", "r5.d": "Prompts and answers with personal data written to logs.",
+    "r6.t": "Unbounded consumption", "r6.d": "Calls with no token limit and agents with no step limit: the attacker sets your bill.",
+    "how.title": "From pull request to fix", "how.lede": "No setup. Atalaya works where you already review code.",
+    "s1.t": "Install the GitHub App", "s1.d": "Pick your repositories. Atalaya only asks to read code and to write comments and checks.",
+    "s2.t": "Open a pull request", "s2.d": "Within minutes a check appears with each issue annotated on its line, only in the files you changed.",
+    "s3.t": "Fix it with context", "s3.d": "AI drops false positives, explains the real risk and proposes the corrected code.",
+    "cov.title": "Plus everything else a security team would check",
+    "cov.lede": "One report, no duplicates across tools, ranked by the real risk in your code.",
+    "c1.t": "Code", "c1.d": "SQL and command injection, SSRF, XSS, path traversal, deserialization. Python, JavaScript, TypeScript, Java and Go.",
+    "c2.t": "Secrets", "c2.d": "Keys and tokens committed to the repository. We never store their values.",
+    "c3.t": "Dependencies", "c3.d": "Libraries with known vulnerabilities (CVEs), with the version that fixes them.",
+    "c4.t": "Infrastructure", "c4.d": "Terraform, Kubernetes, Dockerfile and CloudFormation: public buckets, open ports, missing encryption.",
+    "pr.title": "Clear pricing, no sales call", "pr.lede": "Priced per team, not per developer. Cancel anytime.",
+    "p.mo": "/ month", "p.pop": "Recommended",
+    "p1.a": "1 repository", "p1.b": "Weekly scan", "p1.c": "No AI analysis",
+    "p2.a": "3 repositories", "p2.b": "Every pull request reviewed", "p2.c": "AI analysis and explanations",
+    "p3.a": "20 repositories", "p3.b": "Full AI security", "p3.c": "Suggested fixes", "p3.d": "PDF report for your customers",
+    "p4.a": "Unlimited repositories", "p4.b": "EU AI Act and ISO 42001 reports", "p4.c": "SSO and priority support",
+    "pr.note2": "The first teams on the waitlist get 60 days of the Team plan for free.",
+    "faq.title": "Frequently asked questions",
+    "q1": "Do you store my code?", "a1": "No. Each scan fetches a single commit into a temporary environment that is deleted when it finishes. We only keep the snippets of the findings.",
+    "q2": "Do you train models on my code?", "a2": "No. Neither we nor our AI provider train on it.",
+    "q3": "What permissions does the GitHub App need?", "a3": "Read access to code and metadata, and write access to checks and pull request comments. Nothing else.",
+    "q4": "Does it work if my product doesn't use AI?", "a4": "Yes. Code, secrets, dependency and infrastructure checks work on any project; the AI checks switch on when LLM SDKs or agents are detected.",
+    "q5": "What if a finding is a false positive?", "a5": "AI filters most of them out before you see them. For the rest, add an <code>appsec-ai: ignore</code> comment on the line and it won't come back.",
+    "q6": "Where is data hosted?", "a6": "In the European Union. We sign a GDPR-compliant data processing agreement (DPA).",
+    "join.title": "Review your next pull request with Atalaya",
+    "join.lede": "We're onboarding teams in order of sign-up. We'll email you the install instructions.",
+    "f.email": "Work email", "f.company": "Company", "f.opt": "(optional)", "f.submit": "Join the waitlist",
+    "foot": "Made in Spain for teams everywhere."
+  };
+  var MSG = {
+    es: { invalid: "Escribe un email válido, por ejemplo tu@empresa.com.", sending: "Enviando…", ok: "Listo. Te escribiremos a {email} cuando tengas acceso.", dup: "Ese email ya estaba en la lista. Te escribiremos pronto.", offline: "Esta es una vista previa: el formulario funcionará cuando la web esté desplegada.", error: "No se pudo enviar. Inténtalo de nuevo en unos minutos." },
+    en: { invalid: "Enter a valid email, for example you@company.com.", sending: "Sending…", ok: "Done. We'll email {email} when your access is ready.", dup: "That email was already on the list. We'll be in touch soon.", offline: "This is a preview: the form will work once the site is deployed.", error: "We couldn't send it. Please try again in a few minutes." }
+  };
+  var ES = {};
+  var nodes = document.querySelectorAll("[data-i18n],[data-i18n-html]");
+  nodes.forEach(function (el) {
+    var k = el.getAttribute("data-i18n") || el.getAttribute("data-i18n-html");
+    ES[k] = el.hasAttribute("data-i18n-html") ? el.innerHTML : el.textContent;
+  });
+  var current = "es";
+
+  function apply(lang) {
+    current = lang;
+    var dict = lang === "en" ? EN : ES;
+    nodes.forEach(function (el) {
+      var html = el.hasAttribute("data-i18n-html");
+      var k = el.getAttribute(html ? "data-i18n-html" : "data-i18n");
+      if (dict[k] == null) return;
+      if (html) el.innerHTML = dict[k]; else el.textContent = dict[k];
+    });
+    document.documentElement.lang = lang;
+    document.querySelectorAll(".lang button").forEach(function (b) {
+      b.setAttribute("aria-pressed", String(b.dataset.lang === lang));
+    });
+    try { localStorage.setItem("lang", lang); } catch (e) {}
+  }
+
+  var saved = null;
+  try { saved = localStorage.getItem("lang"); } catch (e) {}
+  var initial = saved || ((navigator.language || "es").toLowerCase().indexOf("es") === 0 ? "es" : "en");
+  apply(initial);
+  document.querySelectorAll(".lang button").forEach(function (b) {
+    b.addEventListener("click", function () { apply(b.dataset.lang); });
+  });
+
+  var form = document.getElementById("waitlist");
+  var msg = document.getElementById("wl-msg");
+  var submit = document.getElementById("wl-submit");
+  function say(text, kind) { msg.textContent = text; msg.className = "form-msg" + (kind ? " " + kind : ""); }
+
+  form.addEventListener("submit", function (ev) {
+    ev.preventDefault();
+    var m = MSG[current];
+    var email = document.getElementById("wl-email").value.trim();
+    var company = document.getElementById("wl-company").value.trim();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)) { say(m.invalid, "err"); return; }
+    submit.disabled = true;
+    say(m.sending);
+    fetch("/api/waitlist", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: email, company: company, lang: current })
+    }).then(function (r) {
+      if (r.status === 201) { say(m.ok.replace("{email}", email), "ok"); form.reset(); }
+      else if (r.status === 200) { say(m.dup, "ok"); }
+      else { say(window.ATALAYA_LIVE ? m.error : m.offline, "err"); }
+    }).catch(function () {
+      // Fuera de nuestro servidor (vista previa) no hay API a la que enviar.
+      say(window.ATALAYA_LIVE ? m.error : m.offline, "err");
+    }).finally(function () { submit.disabled = false; });
+  });
+})();
+</script>
