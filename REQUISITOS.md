@@ -134,14 +134,29 @@ Estimación con Opus 5.5 (modelo por defecto): ~0,05–0,10 $ por fichero con ha
 
 ## 7. Modelo de negocio (hipótesis)
 
-| Plan | Precio | Incluye |
-|---|---|---|
-| Free | 0 | 1 repo, escaneo semanal, sin triage con IA |
-| Starter | 49 €/mes | 3 repos, escaneo en PR, triage con IA |
-| Team | 249 €/mes | 20 repos, seguridad de IA completa, auto‑fix, informe PDF |
-| Business | 799 €/mes | Repos ilimitados, informes de cumplimiento (EU AI Act/ISO 42001), SSO, soporte prioritario |
+Se cobra por servicios, no por desarrollador. Precios en `src/appsec_ai/services.py` (única fuente de verdad para web, panel y Stripe):
 
-Precios iguales en € y $ para simplificar. **Meta:** 20 clientes Team ≈ 5.000 €/mes de ingreso recurrente.
+| Servicio | Motor | Precio |
+|---|---|---|
+| Análisis de código (SAST) | Opengrep + 41 reglas propias | 29 €/mes |
+| Dependencias (SCA) | OSV-Scanner | 19 €/mes |
+| Secretos | Gitleaks | 19 €/mes |
+| Infraestructura (IaC) | Checkov | 19 €/mes |
+| Seguridad de IA (OWASP LLM) | Motor propio + reglas Java/Go | 49 €/mes |
+| Pentest | Equipo de seguridad (manual) | desde 2.900 € por proyecto |
+
+| Paquete | Incluye | Precio |
+|---|---|---|
+| Código | SAST + Secretos | 39 €/mes |
+| Supply chain | SCA + IaC | 29 €/mes |
+| Completo | Los cinco servicios de escaneo | 99 €/mes |
+
+- Free: Secretos y Dependencias, 1 repositorio, escaneo semanal, sin IA.
+- Prueba de 14 días con todos los servicios al instalar la App.
+- Cualquier servicio de pago: hasta 25 repositorios, PRs, triage con IA (1.500 peticiones/mes por servicio), PRs con correcciones e informe PDF. El mapeo a EU AI Act / ISO 42001 va con Seguridad de IA.
+- El cliente elige en el panel qué servicios se aplican a cada repositorio y puede escanear cuando quiera.
+
+Precios iguales en € y $ para simplificar. Hay que validarlos con los design partners y con el coste real de IA medido.
 
 ## 8. Hoja de ruta
 
@@ -150,6 +165,7 @@ Precios iguales en € y $ para simplificar. **Meta:** 20 clientes Team ≈ 5.00
 | ✅ 0 | Núcleo del motor + motor de IA + triage con Claude + CLI + tests |
 | ✅ 1 | 41 reglas SAST propias; motor de IA con tree-sitter y 15 reglas; validación con código real |
 | ✅ 2 | Backend del SaaS: GitHub App, webhooks, cola, worker, checks y comentarios en PR, Docker |
+| ✅ 3 | Servicios por separado (SAST, SCA, Secretos, IaC, IA, Pentest) con paquetes; panel unificado con vista por servicio, escaneo bajo demanda y solicitud de pentests; login de demo user/pass |
 | ✅ 2 | Landing bilingüe (nombre provisional "Atalaya") con lista de espera guardada en el backend y cabeceras de seguridad |
 | 2 | Probar el triage con la API real; conjunto de evaluación; crear la GitHub App y desplegar |
 | 1–2 | Landing bilingüe con lista de espera y precios; reclutar 5–10 design partners entre tus contactos |

@@ -196,7 +196,7 @@ footer { border-top: 1px solid var(--line); padding-block: 28px 40px; color: var
   .steps { grid-template-columns: minmax(0, 1fr); gap: 24px; }
 }
 @media (max-width: 560px) {
-  .top nav a.link { display: none; }
+  .top nav a.link:not(.always) { display: none; }
   .risks, .plans { grid-template-columns: minmax(0, 1fr); }
   .risk { border-right: 0 !important; border-bottom: 1px solid var(--line) !important; }
   .risk:last-child { border-bottom: 0 !important; }
@@ -217,9 +217,11 @@ footer { border-top: 1px solid var(--line); padding-block: 28px 40px; color: var
       Atalaya
     </a>
     <nav>
-      <a class="link" href="#riesgos" data-i18n="nav.risks">Qué detecta</a>
+      <a class="link" href="#servicios" data-i18n="nav.services">Servicios</a>
+      <a class="link" href="#riesgos" data-i18n="nav.risks">Seguridad de IA</a>
       <a class="link" href="#precios" data-i18n="nav.pricing">Precios</a>
       <a class="link" href="#faq" data-i18n="nav.faq">Preguntas</a>
+      <a class="link always" href="/app" data-i18n="nav.login">Entrar</a>
       <div class="lang" role="group" aria-label="Idioma / Language">
         <button type="button" id="lang-es" data-lang="es" aria-pressed="true">ES</button>
         <button type="button" id="lang-en" data-lang="en" aria-pressed="false">EN</button>
@@ -231,9 +233,9 @@ footer { border-top: 1px solid var(--line); padding-block: 28px 40px; color: var
 <main class="wrap" id="inicio">
   <div class="hero">
     <div>
-      <div class="eyebrow" data-i18n="hero.eyebrow">Seguridad de código para equipos que construyen con IA</div>
+      <div class="eyebrow" data-i18n="hero.eyebrow">Seguridad de aplicaciones, del código al pentest</div>
       <h1 data-i18n-html="hero.title">Tu IA lee lo que escribe el usuario. <em>Nosotros leemos tu código.</em></h1>
-      <p class="lede" data-i18n="hero.lede">Atalaya revisa cada pull request en busca de prompt injection, agentes con demasiados permisos, secretos, dependencias vulnerables e infraestructura insegura. Te explica cada problema en tu idioma y te propone el arreglo.</p>
+      <p class="lede" data-i18n="hero.lede">Análisis de código (SAST), dependencias (SCA), secretos, infraestructura como código, seguridad de IA y pentest con nuestro equipo. Contrata solo lo que necesitas y míralo todo en un único panel: cada problema explicado en tu idioma, con el arreglo propuesto.</p>
       <div class="ctas">
         <a class="btn" href="#acceso" data-i18n="hero.cta">Solicitar acceso anticipado</a>
         <a class="btn ghost" href="#como" data-i18n="hero.cta2">Cómo funciona</a>
@@ -265,9 +267,24 @@ footer { border-top: 1px solid var(--line); padding-block: 28px 40px; color: var
     </figure>
   </div>
 
+  <section id="servicios">
+    <div class="sec-head">
+      <h2 data-i18n="sv.title">Una plataforma, seis servicios</h2>
+      <p data-i18n="sv.lede">Cada servicio hace un trabajo distinto con su propio motor. Atalaya los une en un solo panel e informe, sin duplicados y priorizado por el riesgo real de tu código. Tú decides qué se aplica en cada repositorio y cuándo escanear.</p>
+    </div>
+    <div class="risks">
+      <div class="risk"><span class="id">SAST</span><h3 data-i18n="sv1.t">Análisis de código</h3><p data-i18n="sv1.d">Inyección SQL y de comandos, SSRF, XSS, path traversal, deserialización y criptografía débil en Python, JavaScript, TypeScript, Java y Go.</p></div>
+      <div class="risk"><span class="id">SCA</span><h3 data-i18n="sv2.t">Dependencias</h3><p data-i18n="sv2.d">Librerías con vulnerabilidades conocidas (CVE), con la versión que las corrige. Solo se reanaliza cuando cambian tus dependencias.</p></div>
+      <div class="risk"><span class="id">SECRETS</span><h3 data-i18n="sv3.t">Secretos</h3><p data-i18n="sv3.d">Claves, tokens y contraseñas subidos al repositorio. Nunca guardamos su valor.</p></div>
+      <div class="risk"><span class="id">IaC</span><h3 data-i18n="sv4.t">Infraestructura como código</h3><p data-i18n="sv4.d">Terraform, Kubernetes, Dockerfile, CloudFormation y GitHub Actions: buckets públicos, puertos abiertos, cifrado ausente.</p></div>
+      <div class="risk"><span class="id">AI</span><h3 data-i18n="sv5.t">Seguridad de IA</h3><p data-i18n="sv5.d">Prompt injection, agentes con demasiado poder, RAG sin control de acceso y secretos en prompts, con inventario de IA y mapeo al EU AI Act.</p></div>
+      <div class="risk"><span class="id">PENTEST</span><h3 data-i18n="sv6.t">Pentest con nuestro equipo</h3><p data-i18n="sv6.d">Prueba de intrusión manual de web, API, móvil o aplicaciones con LLM. Se pide desde el panel y el informe queda junto al resto.</p></div>
+    </div>
+  </section>
+
   <section id="riesgos">
     <div class="sec-head">
-      <h2 data-i18n="risks.title">Los fallos que traen los LLM, encontrados antes del merge</h2>
+      <h2 data-i18n="risks.title">Seguridad de IA: los fallos que traen los LLM, antes del merge</h2>
       <p data-i18n="risks.lede">Las herramientas de análisis clásicas no saben qué es un prompt. Atalaya sigue el recorrido de los datos de la entrada del usuario al modelo, y de la respuesta del modelo a tu base de datos, tu shell o tu HTML. Cada hallazgo se clasifica según el OWASP Top 10 para aplicaciones LLM.</p>
     </div>
     <div class="risks">
@@ -286,45 +303,32 @@ footer { border-top: 1px solid var(--line); padding-block: 28px 40px; color: var
       <p data-i18n="how.lede">Sin configuración. Atalaya trabaja donde ya revisas el código.</p>
     </div>
     <div class="steps">
-      <div class="step"><h3 data-i18n="s1.t">Instala la GitHub App</h3><p data-i18n="s1.d">Elige los repositorios. Atalaya solo pide permiso de lectura del código y de escritura en comentarios y checks.</p></div>
+      <div class="step"><h3 data-i18n="s1.t">Instala la GitHub App</h3><p data-i18n="s1.d">Elige los repositorios y qué servicios aplicar en cada uno. También puedes escanear cuando quieras desde el panel.</p></div>
       <div class="step"><h3 data-i18n="s2.t">Abre un pull request</h3><p data-i18n="s2.d">En unos minutos aparece un check con cada problema anotado en su línea, solo en los ficheros que has tocado.</p></div>
       <div class="step"><h3 data-i18n="s3.t">Arréglalo con contexto</h3><p data-i18n="s3.d">La IA descarta los falsos positivos, explica el riesgo real en tu idioma y propone el código corregido.</p></div>
-    </div>
-  </section>
-
-  <section>
-    <div class="sec-head">
-      <h2 data-i18n="cov.title">Y todo lo demás que un equipo de seguridad revisaría</h2>
-      <p data-i18n="cov.lede">Un solo informe, sin duplicados entre herramientas, priorizado por el riesgo real en tu código.</p>
-    </div>
-    <div class="cover">
-      <dl>
-        <dt data-i18n="c1.t">Código</dt><dd data-i18n="c1.d">Inyección SQL y de comandos, SSRF, XSS, path traversal, deserialización. Python, JavaScript, TypeScript, Java y Go.</dd>
-        <dt data-i18n="c2.t">Secretos</dt><dd data-i18n="c2.d">Claves y tokens subidos al repositorio. Nunca guardamos su valor.</dd>
-      </dl>
-      <dl>
-        <dt data-i18n="c3.t">Dependencias</dt><dd data-i18n="c3.d">Librerías con vulnerabilidades conocidas (CVE), con la versión que las corrige.</dd>
-        <dt data-i18n="c4.t">Infraestructura</dt><dd data-i18n="c4.d">Terraform, Kubernetes, Dockerfile y CloudFormation: buckets públicos, puertos abiertos, cifrado ausente.</dd>
-      </dl>
     </div>
   </section>
 
   <section id="precios">
     <div class="sec-head">
       <h2 data-i18n="pr.title">Precios claros, sin llamada comercial</h2>
-      <p data-i18n="pr.lede">Pagas por equipo, no por desarrollador. Cancela cuando quieras.</p>
+      <p data-i18n="pr.lede">Pagas por los servicios que usas, no por desarrollador. Combínalos en paquetes con descuento y cancela cuando quieras. 14 días de prueba con todo.</p>
     </div>
     <div class="plans">
       <div class="plan"><div class="name"><span>Free</span></div><div class="price">0 €</div>
-        <ul><li data-i18n="p1.a">1 repositorio</li><li data-i18n="p1.b">Escaneo semanal</li><li data-i18n="p1.c">Sin análisis con IA</li></ul></div>
-      <div class="plan"><div class="name"><span>Starter</span></div><div class="price">49 € <small data-i18n="p.mo">/ mes</small></div>
-        <ul><li data-i18n="p2.a">3 repositorios</li><li data-i18n="p2.b">Revisión de cada pull request</li><li data-i18n="p2.c">Análisis y explicación con IA</li></ul></div>
-      <div class="plan hl"><div class="name"><span>Team</span><span data-i18n="p.pop">Recomendado</span></div><div class="price">249 € <small data-i18n="p.mo">/ mes</small></div>
-        <ul><li data-i18n="p3.a">20 repositorios</li><li data-i18n="p3.b">Seguridad de IA completa</li><li data-i18n="p3.c">Correcciones propuestas</li><li data-i18n="p3.d">Informe PDF para tus clientes</li></ul></div>
-      <div class="plan"><div class="name"><span>Business</span></div><div class="price">799 € <small data-i18n="p.mo">/ mes</small></div>
-        <ul><li data-i18n="p4.a">Repositorios ilimitados</li><li data-i18n="p4.b">Informes EU AI Act e ISO 42001</li><li data-i18n="p4.c">SSO y soporte prioritario</li></ul></div>
+        <ul><li data-i18n="p1.a">Secretos y dependencias</li><li data-i18n="p1.b">1 repositorio, escaneo semanal</li><li data-i18n="p1.c">Sin análisis con IA</li></ul></div>
+      <div class="plan"><div class="name"><span data-i18n="b1.n">Paquete Código</span></div><div class="price">39 € <small data-i18n="p.mo">/ mes</small></div>
+        <ul><li>SAST + <span data-i18n="b.sec">Secretos</span></li><li data-i18n="b.ai">Triage y explicaciones con IA</li><li data-i18n="b.fix">PRs con correcciones e informe PDF</li></ul></div>
+      <div class="plan"><div class="name"><span data-i18n="b2.n">Paquete Supply chain</span></div><div class="price">29 € <small data-i18n="p.mo">/ mes</small></div>
+        <ul><li>SCA + IaC</li><li data-i18n="b.ai2">Triage y explicaciones con IA</li><li data-i18n="b.fix2">PRs con correcciones e informe PDF</li></ul></div>
+      <div class="plan hl"><div class="name"><span data-i18n="b3.n">Paquete Completo</span><span data-i18n="p.pop">Recomendado</span></div><div class="price">99 € <small data-i18n="p.mo">/ mes</small></div>
+        <ul><li data-i18n="b3.a">Los cinco servicios de escaneo</li><li data-i18n="b3.b">Seguridad de IA y mapeo al EU AI Act e ISO 42001</li><li data-i18n="b3.c">Ahorras 36 € al mes</li></ul></div>
     </div>
-    <p class="plans-note" data-i18n="pr.note2">Los primeros equipos de la lista de espera tienen 60 días gratis del plan Team.</p>
+    <div class="risks" style="margin-top:16px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr))">
+      <div class="risk"><span class="id" data-i18n="ps.t">Servicios sueltos</span><p data-i18n="ps.d">SAST 29 € · SCA 19 € · Secretos 19 € · IaC 19 € · Seguridad de IA 49 € al mes, hasta 25 repositorios.</p></div>
+      <div class="risk"><span class="id">PENTEST</span><p data-i18n="ps.p">Desde 2.900 € por proyecto. Pídelo desde el panel y te enviamos alcance y presupuesto.</p></div>
+    </div>
+    <p class="plans-note" data-i18n="pr.note2">Los primeros equipos de la lista de espera tienen 60 días gratis del Paquete Completo.</p>
   </section>
 
   <section id="faq">
@@ -333,7 +337,7 @@ footer { border-top: 1px solid var(--line); padding-block: 28px 40px; color: var
       <div>
         <details><summary data-i18n="q1">¿Guardáis mi código?</summary><p data-i18n="a1">No. Cada análisis descarga un único commit en un entorno temporal que se borra al terminar. Solo conservamos los fragmentos de los hallazgos.</p></details>
         <details><summary data-i18n="q2">¿Usáis mi código para entrenar modelos?</summary><p data-i18n="a2">No. Ni nosotros ni nuestro proveedor de IA lo usamos para entrenar.</p></details>
-        <details><summary data-i18n="q3">¿Qué permisos pide la GitHub App?</summary><p data-i18n="a3">Lectura del código y de los metadatos, y escritura en checks y comentarios de pull requests. Nada más.</p></details>
+        <details><summary data-i18n="q3">¿Qué permisos pide la GitHub App?</summary><p data-i18n="a3">Lectura del código, escritura en checks y comentarios de pull requests y, solo para abrir PRs con correcciones cuando las pides, escritura del contenido en ramas nuevas. Nunca escribe en tus ramas.</p></details>
       </div>
       <div>
         <details><summary data-i18n="q4">¿Funciona si no uso IA en mi producto?</summary><p data-i18n="a4">Sí. El análisis de código, secretos, dependencias e infraestructura funciona en cualquier proyecto; la parte de IA se activa sola cuando detecta SDKs de LLM o agentes.</p></details>
@@ -369,10 +373,10 @@ footer { border-top: 1px solid var(--line); padding-block: 28px 40px; color: var
 <script>
 (function () {
   var EN = {
-    "nav.risks": "What it finds", "nav.pricing": "Pricing", "nav.faq": "FAQ",
-    "hero.eyebrow": "Code security for teams building with AI",
+    "nav.services": "Services", "nav.risks": "AI security", "nav.pricing": "Pricing", "nav.faq": "FAQ", "nav.login": "Sign in",
+    "hero.eyebrow": "Application security, from code to pentest",
     "hero.title": "Your AI reads what users type. <em>We read your code.</em>",
-    "hero.lede": "Atalaya reviews every pull request for prompt injection, over-privileged agents, secrets, vulnerable dependencies and insecure infrastructure. It explains each issue in plain language and proposes the fix.",
+    "hero.lede": "Code analysis (SAST), dependencies (SCA), secrets, infrastructure as code, AI security and pentests by our team. Subscribe only to what you need and see it all in one dashboard: every issue explained in plain language, with the fix proposed.",
     "hero.cta": "Request early access", "hero.cta2": "How it works",
     "hero.fine": "Installs as a GitHub App in two minutes. No agents to install, no CI changes.",
     "pr.status": "atalaya · 1 critical",
@@ -387,26 +391,32 @@ footer { border-top: 1px solid var(--line); padding-block: 28px 40px; color: var
     "r5.t": "Leaking data", "r5.d": "Prompts and answers with personal data written to logs.",
     "r6.t": "Unbounded consumption", "r6.d": "Calls with no token limit and agents with no step limit: the attacker sets your bill.",
     "how.title": "From pull request to fix", "how.lede": "No setup. Atalaya works where you already review code.",
-    "s1.t": "Install the GitHub App", "s1.d": "Pick your repositories. Atalaya only asks to read code and to write comments and checks.",
+    "s1.t": "Install the GitHub App", "s1.d": "Pick your repositories and which services run on each one. You can also scan whenever you want from the dashboard.",
     "s2.t": "Open a pull request", "s2.d": "Within minutes a check appears with each issue annotated on its line, only in the files you changed.",
     "s3.t": "Fix it with context", "s3.d": "AI drops false positives, explains the real risk and proposes the corrected code.",
-    "cov.title": "Plus everything else a security team would check",
-    "cov.lede": "One report, no duplicates across tools, ranked by the real risk in your code.",
-    "c1.t": "Code", "c1.d": "SQL and command injection, SSRF, XSS, path traversal, deserialization. Python, JavaScript, TypeScript, Java and Go.",
-    "c2.t": "Secrets", "c2.d": "Keys and tokens committed to the repository. We never store their values.",
-    "c3.t": "Dependencies", "c3.d": "Libraries with known vulnerabilities (CVEs), with the version that fixes them.",
-    "c4.t": "Infrastructure", "c4.d": "Terraform, Kubernetes, Dockerfile and CloudFormation: public buckets, open ports, missing encryption.",
-    "pr.title": "Clear pricing, no sales call", "pr.lede": "Priced per team, not per developer. Cancel anytime.",
+    "sv.title": "One platform, six services",
+    "sv.lede": "Each service does a different job with its own engine. Atalaya brings them together in one dashboard and report, without duplicates and ranked by the real risk in your code. You decide what runs on each repository and when to scan.",
+    "sv1.t": "Code analysis", "sv1.d": "SQL and command injection, SSRF, XSS, path traversal, deserialisation and weak crypto in Python, JavaScript, TypeScript, Java and Go.",
+    "sv2.t": "Dependencies", "sv2.d": "Libraries with known vulnerabilities (CVEs), with the version that fixes them. Only re-analysed when your dependencies change.",
+    "sv3.t": "Secrets", "sv3.d": "Keys, tokens and passwords committed to the repository. We never store their values.",
+    "sv4.t": "Infrastructure as code", "sv4.d": "Terraform, Kubernetes, Dockerfile, CloudFormation and GitHub Actions: public buckets, open ports, missing encryption.",
+    "sv5.t": "AI security", "sv5.d": "Prompt injection, over-powered agents, RAG without access control and secrets in prompts, with an AI inventory and EU AI Act mapping.",
+    "sv6.t": "Pentest by our team", "sv6.d": "Manual penetration test of web, API, mobile or LLM applications. Request it from the dashboard; the report sits next to everything else.",
+    "pr.title": "Clear pricing, no sales call",
+    "pr.lede": "Pay for the services you use, not per developer. Combine them in discounted bundles and cancel anytime. 14-day trial with everything.",
     "p.mo": "/ month", "p.pop": "Recommended",
-    "p1.a": "1 repository", "p1.b": "Weekly scan", "p1.c": "No AI analysis",
-    "p2.a": "3 repositories", "p2.b": "Every pull request reviewed", "p2.c": "AI analysis and explanations",
-    "p3.a": "20 repositories", "p3.b": "Full AI security", "p3.c": "Suggested fixes", "p3.d": "PDF report for your customers",
-    "p4.a": "Unlimited repositories", "p4.b": "EU AI Act and ISO 42001 reports", "p4.c": "SSO and priority support",
-    "pr.note2": "The first teams on the waitlist get 60 days of the Team plan for free.",
+    "p1.a": "Secrets and dependencies", "p1.b": "1 repository, weekly scan", "p1.c": "No AI analysis",
+    "b1.n": "Code bundle", "b2.n": "Supply chain bundle", "b3.n": "Complete bundle", "b.sec": "Secrets",
+    "b.ai": "AI triage and explanations", "b.ai2": "AI triage and explanations",
+    "b.fix": "Fix PRs and PDF report", "b.fix2": "Fix PRs and PDF report",
+    "b3.a": "All five scanning services", "b3.b": "AI security and EU AI Act / ISO 42001 mapping", "b3.c": "Save €36 a month",
+    "ps.t": "Single services", "ps.d": "SAST €29 · SCA €19 · Secrets €19 · IaC €19 · AI security €49 a month, up to 25 repositories.",
+    "ps.p": "From €2,900 per project. Request it from the dashboard and we'll send scope and a quote.",
+    "pr.note2": "The first teams on the waitlist get 60 days of the Complete bundle for free.",
     "faq.title": "Frequently asked questions",
     "q1": "Do you store my code?", "a1": "No. Each scan fetches a single commit into a temporary environment that is deleted when it finishes. We only keep the snippets of the findings.",
     "q2": "Do you train models on my code?", "a2": "No. Neither we nor our AI provider train on it.",
-    "q3": "What permissions does the GitHub App need?", "a3": "Read access to code and metadata, and write access to checks and pull request comments. Nothing else.",
+    "q3": "What permissions does the GitHub App need?", "a3": "Read access to code, write access to checks and pull request comments and, only to open fix PRs when you ask for them, write access to contents on new branches. It never writes to your branches.",
     "q4": "Does it work if my product doesn't use AI?", "a4": "Yes. Code, secrets, dependency and infrastructure checks work on any project; the AI checks switch on when LLM SDKs or agents are detected.",
     "q5": "What if a finding is a false positive?", "a5": "AI filters most of them out before you see them. For the rest, add an <code>appsec-ai: ignore</code> comment on the line and it won't come back.",
     "q6": "Where is data hosted?", "a6": "In the European Union. We sign a GDPR-compliant data processing agreement (DPA).",
