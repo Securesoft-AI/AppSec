@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import datetime as dt
 from enum import Enum
+from pathlib import Path
 
-from sqlalchemy import JSON, BigInteger, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, create_engine, select, update
+from sqlalchemy import (JSON, BigInteger, Column, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint,
+                        create_engine, inspect, select, text, update)
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship, sessionmaker
 
 
@@ -180,6 +182,9 @@ class WaitlistEntry(Base):
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+MIGRATION_LOCK = 0x61707073  # clave del bloqueo de Postgres durante las migraciones
+
+
 class Database:
     def __init__(self, url: str, cipher=None):
         self.cipher = cipher  # crypto.Cipher: cifra resultados y detalles con código del cliente
@@ -187,8 +192,26 @@ class Database:
         self.engine = create_engine(url, **kwargs)
         self.session_factory = sessionmaker(self.engine, expire_on_commit=False)
 
-    def create_all(self):
-        Base.metadata.create_all(self.engine)
+    def migrate(self):
+        """Lleva el esquema a la última migración. Lo llaman la API y el worker al arrancar.
+
+        Una base de datos creada antes de las migraciones (con create_all) se adopta: se añaden las tablas
+        y columnas que le falten y se marca como al día. En Postgres un bloqueo evita que la API y los
+        workers migren a la vez.
+        """
+        from alembic import command
+
+        cfg = _alembic_config()
+        with self.engine.begin() as conn:
+            if conn.dialect.name == "postgresql":
+                conn.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": MIGRATION_LOCK})
+            cfg.attributes["connection"] = conn
+            tables = set(inspect(conn).get_table_names())
+            if "alembic_version" not in tables and "installations" in tables:
+                _adopt_legacy(conn)
+                command.stamp(cfg, "head")
+            else:
+                command.upgrade(cfg, "head")
 
     def session(self) -> Session:
         return self.session_factory()
@@ -218,3 +241,63 @@ class Database:
                 with self.session() as s:
                     return s.get(model, job_id)
         return None
+
+    def new_migration(self, message: str) -> str:
+        """Genera la migración de los cambios en los modelos (la base de datos debe estar al día)."""
+        from alembic import command
+        from alembic.script import ScriptDirectory
+
+        self.migrate()
+        cfg = _alembic_config()
+        head = ScriptDirectory.from_config(cfg).get_current_head()
+        with self.engine.begin() as conn:
+            cfg.attributes["connection"] = conn
+            script = command.revision(cfg, message=message, autogenerate=True, rev_id=f"{int(head) + 1:04d}")
+        return script.path
+
+
+def _alembic_config():
+    from alembic.config import Config
+
+    cfg = Config()
+    cfg.set_main_option("script_location", str(Path(__file__).with_name("migrations")))
+    return cfg
+
+
+def _adopt_legacy(conn):
+    """Completa una base de datos creada con create_all antes de las migraciones."""
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+
+    op = Operations(MigrationContext.configure(conn))
+    insp = inspect(conn)
+    existing = set(insp.get_table_names())
+    for table in Base.metadata.sorted_tables:
+        if table.name not in existing:
+            table.create(conn)
+            continue
+        have = {c["name"] for c in insp.get_columns(table.name)}
+        for col in table.columns:
+            if col.name not in have:
+                op.add_column(table.name, Column(col.name, col.type, nullable=col.nullable,
+                                                 server_default=None if col.nullable else _server_default(col)))
+        indexes = {i["name"] for i in insp.get_indexes(table.name)}
+        for index in table.indexes:
+            if index.name not in indexes:
+                index.create(conn)
+
+
+def _server_default(col):
+    """Valor para las filas que ya existen al añadir una columna obligatoria."""
+    default = col.default.arg if col.default is not None else None
+    if col.default is not None and col.default.is_callable:
+        default = default(None)  # utcnow, list, dict
+    if isinstance(default, dt.datetime):
+        return text("CURRENT_TIMESTAMP")
+    if isinstance(default, (list, dict)):
+        return "[]" if isinstance(default, list) else "{}"
+    if isinstance(default, bool):
+        return text("true" if default else "false")
+    if isinstance(default, (int, str)):
+        return str(default)
+    raise RuntimeError(f"columna {col.table.name}.{col.name} sin valor por defecto para filas existentes")

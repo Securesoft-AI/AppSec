@@ -144,7 +144,7 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
     db = db or Database(settings.database_url, Cipher.from_keys(settings.data_encryption_key))
     if db.cipher is None:
         log.warning("DATA_ENCRYPTION_KEY no configurada: los resultados se guardan sin cifrar")
-    db.create_all()
+    db.migrate()
     app = FastAPI(title="appsec-ai", version="0.1.0", docs_url=None, redoc_url=None)
     admin_token = os.environ.get("ADMIN_API_TOKEN", "")
     if settings.demo_login and not settings.session_secret:

@@ -92,6 +92,22 @@ Límites por plan (en `src/appsec_ai/service/plans.py`; el presupuesto de IA es 
 | Team | 20 | Sí | Cada push | 5.000 | Sí | Sí | No |
 | Business | Sin límite | Sí | Cada push | 20.000 | Sí | Sí | Sí |
 
+## 3c. Base de datos y migraciones
+
+La API y el worker aplican las migraciones pendientes al arrancar (con un bloqueo en Postgres para que no
+lo hagan a la vez); también se pueden aplicar a mano con `appsec-ai migrate`. Una base de datos creada por
+una versión anterior, sin migraciones, se completa con las tablas y columnas que le falten y se marca como
+al día.
+
+Al cambiar un modelo de `src/appsec_ai/service/db.py`, genera su migración, revísala y súbela con el cambio:
+
+```bash
+DATABASE_URL=sqlite:///./dev.db appsec-ai migrate --new "Describe el cambio"
+```
+
+`tests/test_migrations.py` falla si los modelos y las migraciones no coinciden. Con `TEST_POSTGRES_URL`
+definida también se prueban contra Postgres (el CI lo hace).
+
 ## 4. Seguridad del propio servicio
 
 - Webhooks verificados con HMAC-SHA256. Sin secreto configurado se rechazan todos.

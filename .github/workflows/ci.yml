@@ -10,6 +10,17 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    services:
+      postgres:  # las migraciones se prueban también en Postgres
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: appsec
+          POSTGRES_PASSWORD: appsec
+          POSTGRES_DB: appsec_test
+        ports: ["5432:5432"]
+        options: --health-cmd "pg_isready -U appsec" --health-interval 5s --health-retries 10
+    env:
+      TEST_POSTGRES_URL: postgresql+psycopg://appsec:appsec@localhost:5432/appsec_test
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
