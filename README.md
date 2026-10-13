@@ -41,6 +41,9 @@ Python se analiza sobre el AST y JS/TS sobre el árbol de [tree-sitter], con flu
 | `llm08-rag-without-access-filter` | LLM08 | Búsqueda en un vector store con la pregunta del usuario y sin filtro por usuario o tenant (LangChain, Chroma, Pinecone) |
 | `llm10-no-output-limit` | LLM10 | Llamadas OpenAI-compatibles o Vercel AI sin límite de tokens |
 | `llm10-unbounded-agent-loop` | LLM10 | Agentes con `max_iterations=None` |
+| `llm10-no-rate-limit` | LLM10 | Endpoints que llaman al LLM con entrada del usuario, sin ninguna librería de rate limiting en el repositorio |
+
+Java (Spring AI, LangChain4j, SDK de OpenAI y Anthropic) y Go (go-openai, openai-go, anthropic-sdk-go, langchaingo, Gemini) se analizan con reglas de flujo de datos de Opengrep/Semgrep en `src/appsec_ai/rules/ai/`, con los mismos ids: salida del LLM hacia SQL, comandos, peticiones HTTP, ficheros, HTML o reflexión; entrada de la petición en el prompt de sistema; herramientas `@Tool` peligrosas; secretos y autorización en el prompt.
 
 Frameworks reconocidos: Anthropic, OpenAI, Gemini, Bedrock, Mistral, LiteLLM, LangChain/LangGraph (Python y JS), LlamaIndex, CrewAI, AutoGen, Pydantic AI, OpenAI Agents SDK, Claude Agent SDK, Vercel AI SDK, Mastra, MCP (FastMCP y SDK oficial) y vector stores.
 

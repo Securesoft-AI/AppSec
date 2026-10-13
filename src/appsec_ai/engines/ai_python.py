@@ -307,6 +307,8 @@ class PythonAIAnalyzer(ast.NodeVisitor):
         for arg in system_args:
             if self.taint_of(arg):
                 self.add("llm01-untrusted-input-in-system-prompt", call)
+            if self.taint_of(arg) == "user":
+                self.out.component("llm_entrypoint", name, call.lineno)
             prompt_text = self.resolve_text(arg)
             if SECRET_IN_TEXT.search(prompt_text):
                 self.add("llm07-secret-in-system-prompt", call)
@@ -317,6 +319,9 @@ class PythonAIAnalyzer(ast.NodeVisitor):
             taint = self.taint_of(arg)
             if not taint:
                 continue
+            if taint == "user":
+                # El usuario puede disparar esta llamada: lo usa la regla de rate limiting.
+                self.out.component("llm_entrypoint", name, call.lineno)
             if taint == "external":
                 self.add("llm01-indirect-prompt-injection", call)
             elif has_interpolation(arg) or names_in(arg) & self.state.prompt_vars:

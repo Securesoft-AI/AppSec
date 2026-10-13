@@ -18,6 +18,7 @@ from appsec_ai.models import Finding
 
 ATLAS = {
     "AML.T0034": "Cost Harvesting",
+    "AML.T0029": "Denial of AI Service",
     "AML.T0034.002": "Agentic Resource Consumption",
     "AML.T0050": "Command and Scripting Interpreter",
     "AML.T0051": "LLM Prompt Injection",
@@ -83,6 +84,7 @@ RULES: dict[str, Mapping] = {
     "llm07-authorization-in-prompt": Mapping(("AML.T0051", "AML.T0057"), _PRIV, ("A.6.2.4",), ("Art. 15",)),
     "llm08-rag-without-access-filter": Mapping(("AML.T0085.000", "AML.T0057"), _PRIV, ("A.6.2.4",), ("Art. 15",)),
     "llm10-no-output-limit": Mapping(("AML.T0034",), _SEC, ("A.6.2.6",), ()),
+    "llm10-no-rate-limit": Mapping(("AML.T0034", "AML.T0029"), _SEC, ("A.6.2.6",), ()),
     "llm10-unbounded-agent-loop": Mapping(("AML.T0034.002",), _AGENCY, ("A.6.2.6",), ("Art. 14",)),
 }
 

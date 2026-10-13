@@ -106,6 +106,12 @@ RULES = {r.id: r for r in [
          "Llamada al LLM sin límite de tokens de salida",
          "Sin un límite explícito de tokens, un atacante puede provocar respuestas largas y costes elevados. "
          "Fija max_tokens y limita también la frecuencia de peticiones por usuario.", "CWE-770"),
+    Rule("llm10-no-rate-limit", "LLM10", Severity.LOW,
+         "Endpoint que llama al LLM sin límite de frecuencia por usuario",
+         "Cualquiera que llegue a este endpoint puede lanzar peticiones al modelo sin límite: coste "
+         "ilimitado y denegación de servicio por agotar la cuota. No se ha encontrado ninguna librería de "
+         "rate limiting en el repositorio. Limita peticiones y tokens por usuario o IP; si ya se limita en el "
+         "API gateway o el proxy, ignora este aviso.", "CWE-770"),
     Rule("llm10-unbounded-agent-loop", "LLM10", Severity.MEDIUM,
          "Agente sin límite de iteraciones",
          "El agente puede encadenar llamadas a herramientas sin límite, con coste y riesgo ilimitados. "
@@ -145,6 +151,13 @@ RETRIEVER_INVOKE = re.compile(r"\.(invoke|ainvoke|a?get_relevant_documents|getRe
 VECTOR_QUERY_KEYS = {"query_texts", "query_embeddings", "vector", "top_k", "queryTexts", "queryEmbeddings", "topK"}
 ACCESS_FILTER_KEYS = {"filter", "filters", "where", "where_document", "namespace", "query_filter", "expr",
                       "pre_filter", "tenant", "whereDocument", "queryFilter", "preFilter"}
+
+# Señales de rate limiting en código o dependencias (LLM10). Amplio a propósito: mejor no avisar de más.
+RATE_LIMIT_SIGNAL = re.compile(
+    r"(?i)(flask[_-]limiter|slowapi|django[_-]ratelimit|fastapi[_-]limiter|ratelimit|rate[_-]?limit|throttl"
+    r"|rate-limiter-flexible|@upstash/ratelimit|bottleneck|bucket4j|resilience4j|x/time/rate|tollbooth"
+    r"|ulule/limiter|token[_-]?bucket)"
+)
 
 # Operaciones peligrosas dentro de herramientas de agentes (LLM06), por nombre de llamada.
 DANGEROUS_CALL = re.compile(

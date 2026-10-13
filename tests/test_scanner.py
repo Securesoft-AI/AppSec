@@ -29,6 +29,7 @@ def test_detects_llm_risks_in_python():
         ("app.py", "llm01-prompt-concatenation"),        # f"... {question}"
         ("app.py", "llm01-indirect-prompt-injection"),   # contenido de una URL
         ("app.py", "llm02-llm-io-logged"),               # print(answer)
+        ("app.py", "llm10-no-rate-limit"),               # /ask llama al LLM y no hay rate limiting
     }
 
 
@@ -39,6 +40,7 @@ def test_detects_llm_risks_in_typescript():
         "llm05-llm-output-to-html",
         "llm01-untrusted-input-in-system-prompt",
         "llm10-no-output-limit",
+        "llm10-no-rate-limit",
     }
 
 
@@ -80,6 +82,8 @@ def test_rag_access_control_and_authorization_in_prompt():
         ("rag.ts", 14, "llm08-rag-without-access-filter"),   # Pinecone query sin filter
         ("rag.ts", 18, "llm08-rag-without-access-filter"),   # asRetriever sin filtro + invoke
         ("rag.ts", 21, "llm07-authorization-in-prompt"),     # "You must only show invoices..."
+        ("rag.py", 22, "llm10-no-rate-limit"),               # sin rate limiting en el repositorio
+        ("rag.ts", 21, "llm10-no-rate-limit"),
     }
 
 
@@ -131,17 +135,28 @@ def test_ai_inventory():
     assert ("model", "gpt-4o") in inv
 
 
+def test_rate_limit_rule_is_silenced_by_any_rate_limiting_signal(tmp_path):
+    shutil.copytree(FIXTURE, tmp_path / "app")
+    assert any(f.rule_id == "llm10-no-rate-limit" for f in AISecurityEngine().run(tmp_path / "app"))
+    (tmp_path / "app" / "requirements.txt").write_text("flask\nslowapi==0.1.9\n")
+    assert not any(f.rule_id == "llm10-no-rate-limit" for f in AISecurityEngine().run(tmp_path / "app"))
+
+
 def test_safe_llm_code_has_no_findings(tmp_path):
     (tmp_path / "safe.py").write_text(textwrap.dedent('''
         import anthropic
         from flask import Flask, request
+        from flask_limiter import Limiter
+        from flask_limiter.util import get_remote_address
         from markupsafe import escape
 
         app = Flask(__name__)
+        limiter = Limiter(get_remote_address, app=app)
         client = anthropic.Anthropic()
         SYSTEM = "Eres un asistente. Responde solo sobre nuestros productos."
 
         @app.route("/ask")
+        @limiter.limit("10 per minute")
         def ask():
             question = request.args.get("q", "")
             msg = client.messages.create(
@@ -309,7 +324,8 @@ def test_cross_engine_findings_are_merged():
     from appsec_ai.scanner import dedupe
 
     def mk(engine, rule, cwe, sev=Severity.HIGH):
-        return Finding(engine=engine, rule_id=rule, category=Category.SAST, severity=sev, title=rule,
+        category = Category.AI if rule.startswith("llm") else Category.SAST
+        return Finding(engine=engine, rule_id=rule, category=category, severity=sev, title=rule,
                        file="app.py", line=10, snippet=rule, frameworks=[cwe])
 
     merged = dedupe([mk("opengrep", "python-code-injection", "CWE-95", Severity.CRITICAL),
@@ -321,6 +337,29 @@ def test_cross_engine_findings_are_merged():
 
 RULES_DIR = Path(__file__).parent.parent / "src" / "appsec_ai" / "rules" / "sast"
 RULE_TESTS = Path(__file__).parent / "rules"
+
+
+@pytest.mark.skipif(not (shutil.which("opengrep") or shutil.which("semgrep")), reason="opengrep/semgrep no instalado")
+@pytest.mark.parametrize("lang", ["java", "go"])
+def test_ai_rules_for_java_and_go(lang):
+    """Reglas de IA en YAML (rules/ai): casos ruleid/ok en tests/rules/ai/."""
+    import subprocess
+
+    binary = shutil.which("opengrep") or shutil.which("semgrep")
+    target = next((RULE_TESTS / "ai").glob(f"{lang}.*"))
+    config = RULES_DIR.parent / "ai" / f"{lang}.yaml"
+    proc = subprocess.run([binary, "--test", "--metrics=off", "--config", str(config), str(target)],
+                          capture_output=True, text=True, timeout=600)
+    assert proc.returncode == 0, proc.stdout[-2000:] + proc.stderr[-2000:]
+
+
+@pytest.mark.skipif(not (shutil.which("opengrep") or shutil.which("semgrep")), reason="opengrep/semgrep no instalado")
+def test_java_and_go_ai_findings_are_ai_category_with_atlas(tmp_path):
+    shutil.copy(RULE_TESTS / "ai" / "go.go", tmp_path / "main.go")
+    result = scan(tmp_path, engines=["opengrep"])
+    ai = [f for f in result.findings if f.rule_id == "llm05-llm-output-to-code-exec"]
+    assert ai and ai[0].category == Category.AI and ai[0].severity == Severity.CRITICAL
+    assert "MITRE-ATLAS AML.T0050" in ai[0].frameworks
 
 
 @pytest.mark.skipif(not (shutil.which("opengrep") or shutil.which("semgrep")), reason="opengrep/semgrep no instalado")

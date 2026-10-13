@@ -42,8 +42,12 @@ def key(f: Finding) -> str:
     return f"{f.file}:{f.rule_id}"
 
 
+# Regla de nivel repositorio (no hay rate limiting en ningún sitio): en una carpeta de casos sueltos no aplica.
+REPO_LEVEL_RULES = {"llm10-no-rate-limit"}
+
+
 def detect() -> list[Finding]:
-    return scan(CASES, engines=["ai-security"]).findings
+    return [f for f in scan(CASES, engines=["ai-security"]).findings if f.rule_id not in REPO_LEVEL_RULES]
 
 
 def check_coverage(findings: list[Finding], labels: dict[str, dict]) -> tuple[list[str], list[str]]:

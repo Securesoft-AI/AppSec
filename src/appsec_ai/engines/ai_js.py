@@ -350,6 +350,8 @@ class JSAIAnalyzer:
         for v in system_values:
             if self.taint_of(v, state):
                 self.add("llm01-untrusted-input-in-system-prompt", node)
+            if self.taint_of(v, state) == "user":
+                self.out.component("llm_entrypoint", name, self.line(node))
             literal = self.constants.get(text(v), v) if v.type == "identifier" else v
             if SECRET_IN_TEXT.search(string_value(literal)):
                 self.add("llm07-secret-in-system-prompt", node)
@@ -357,6 +359,9 @@ class JSAIAnalyzer:
                 self.add("llm07-authorization-in-prompt", node)
         for v in prompt_values:
             taint = self.taint_of(v, state)
+            if taint == "user":
+                # El usuario puede disparar esta llamada: lo usa la regla de rate limiting.
+                self.out.component("llm_entrypoint", name, self.line(node))
             if taint == "external":
                 self.add("llm01-indirect-prompt-injection", node)
             elif taint == "user" and (has_interpolation(v) or identifiers(v) & state.prompt_vars):

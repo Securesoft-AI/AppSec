@@ -13,6 +13,9 @@ import os
 import tempfile
 from pathlib import Path
 
+from appsec_ai.compliance import atlas_refs
+from appsec_ai.engines.ai_common import OWASP
+from appsec_ai.engines.ai_common import RULES as AI_RULES
 from appsec_ai.engines.base import Engine, iter_source_files, read_lines, relpath, run_json, which
 from appsec_ai.models import Category, Finding, Severity
 
@@ -164,7 +167,7 @@ class OpengrepEngine(Engine):
         for i in range(0, len(files), 500):
             data = run_json(
                 [self.find_binary(), "scan", "--json", "--quiet", "--metrics=off", "--disable-version-check",
-                 "--config", str(RULES_DIR / "sast"), *files[i:i + 500]],
+                 "--config", str(RULES_DIR / "sast"), "--config", str(RULES_DIR / "ai"), *files[i:i + 500]],
                 ok_codes=(0, 1),
             )
             results += (data or {}).get("results", [])
@@ -175,18 +178,27 @@ class OpengrepEngine(Engine):
             meta = extra.get("metadata", {}) or {}
             rel = relpath(target, r.get("path", ""))
             start, end = r.get("start", {}).get("line", 0), r.get("end", {}).get("line", 0)
+            rule_id = r.get("check_id", "").split(".")[-1]
+            severity = Severity.parse(meta.get("severity") or extra.get("severity"))
+            frameworks = [c.split(":")[0] for c in _as_list(meta.get("cwe"))]
+            category = Category.SAST
+            if meta.get("category") == "ai" and rule_id in AI_RULES:
+                # Reglas de IA para Java y Go (rules/ai): misma severidad y referencias que en Python y JS/TS.
+                ai = AI_RULES[rule_id]
+                category, severity = Category.AI, ai.severity
+                frameworks = [OWASP[ai.owasp], ai.cwe, *atlas_refs(rule_id)]
             findings.append(Finding(
                 engine=self.name,
-                rule_id=r.get("check_id", "").split(".")[-1],
-                category=Category.SAST,
-                severity=Severity.parse(meta.get("severity") or extra.get("severity")),
+                rule_id=rule_id,
+                category=category,
+                severity=severity,
                 title=meta.get("title") or extra.get("message", "")[:120],
                 message=extra.get("message", ""),
                 file=rel,
                 line=start,
                 end_line=end,
                 snippet=read_lines(target, rel, start, end),
-                frameworks=[c.split(":")[0] for c in _as_list(meta.get("cwe"))],
+                frameworks=frameworks,
                 references=_as_list(meta.get("references")),
             ))
         return findings
