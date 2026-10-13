@@ -154,6 +154,7 @@ class Triager:
         self.language = language
         self.max_requests = max_requests
         self.cache_dir = cache_dir
+        self.cipher = None  # opcional: objeto con encrypt/decrypt(bytes) para cifrar la caché en disco
         self.requests = 0
         self.usage: dict[str, int] = defaultdict(int)
         self.warnings: list[str] = []
@@ -335,13 +336,15 @@ class Triager:
         p = self.cache_dir / f"{self._cache_key(f)}.json"
         if p.exists():
             try:
-                f.triage = Triage.model_validate_json(p.read_text())
+                data = p.read_bytes()
+                f.triage = Triage.model_validate_json(self.cipher.decrypt(data) if self.cipher else data)
                 return True
-            except ValidationError:
+            except (ValidationError, ValueError, RuntimeError):  # entrada corrupta o de otra clave
                 return False
         return False
 
     def _store_cached(self, f: Finding):
         if self.cache_dir and f.triage:
             self.cache_dir.mkdir(parents=True, exist_ok=True)
-            (self.cache_dir / f"{self._cache_key(f)}.json").write_text(f.triage.model_dump_json())
+            data = f.triage.model_dump_json().encode()
+            (self.cache_dir / f"{self._cache_key(f)}.json").write_bytes(self.cipher.encrypt(data) if self.cipher else data)

@@ -101,7 +101,12 @@ def run_service(args) -> int:
     if missing:
         print(f"Faltan variables de entorno: {', '.join(missing)}", file=sys.stderr)
         return 2
-    db = Database(settings.database_url)
+    from appsec_ai.service.crypto import Cipher
+
+    db = Database(settings.database_url, Cipher.from_keys(settings.data_encryption_key))
+    if db.cipher is None:
+        logging.getLogger("appsec_ai.worker").warning(
+            "DATA_ENCRYPTION_KEY no configurada: resultados y caché se guardan sin cifrar")
     db.create_all()
     Worker(settings, db, GitHubApp(settings.github_app_id, settings.github_private_key, settings.github_api_url)).run_forever()
     return 0

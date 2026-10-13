@@ -11,6 +11,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from sqlalchemy import select
 
 from appsec_ai.service.config import Settings, get_settings
+from appsec_ai.service.crypto import Cipher, unseal
 from appsec_ai.service.db import Database, FixRequest, Installation, Repository, Scan, ScanStatus
 from appsec_ai.service.webhooks import handle_event, request_fix, verify_signature
 
@@ -20,7 +21,9 @@ MAX_WEBHOOK_BYTES = 25 * 1024 * 1024  # límite de GitHub para webhooks
 
 def create_app(settings: Settings | None = None, db: Database | None = None) -> FastAPI:
     settings = settings or get_settings()
-    db = db or Database(settings.database_url)
+    db = db or Database(settings.database_url, Cipher.from_keys(settings.data_encryption_key))
+    if db.cipher is None:
+        log.warning("DATA_ENCRYPTION_KEY no configurada: los resultados se guardan sin cifrar")
     db.create_all()
     app = FastAPI(title="appsec-ai", version="0.1.0", docs_url=None, redoc_url=None)
     admin_token = os.environ.get("ADMIN_API_TOKEN", "")
@@ -80,7 +83,7 @@ def create_app(settings: Settings | None = None, db: Database | None = None) -> 
             scan = s.get(Scan, scan_id)
             if scan is None:
                 raise HTTPException(status_code=404, detail="escaneo no encontrado")
-            return {**_scan_summary(scan), "result": scan.result}
+            return {**_scan_summary(scan), "result": unseal(db.cipher, scan.result)}
 
     @app.post("/api/scans/{scan_id}/fix-pr", dependencies=[Depends(require_admin)])
     def create_fix_pr(scan_id: int):
@@ -91,7 +94,7 @@ def create_app(settings: Settings | None = None, db: Database | None = None) -> 
                 raise HTTPException(status_code=404, detail="escaneo no encontrado")
             if scan.status != ScanStatus.COMPLETED.value:
                 raise HTTPException(status_code=409, detail="el escaneo aún no ha terminado")
-            return _fix_summary(request_fix(s, scan, "api"))
+            return _fix_summary(request_fix(s, scan, "api"), db.cipher)
 
     @app.get("/api/scans/{scan_id}/fix-pr", dependencies=[Depends(require_admin)])
     def get_fix_pr(scan_id: int):
@@ -99,14 +102,14 @@ def create_app(settings: Settings | None = None, db: Database | None = None) -> 
             fix = s.scalars(select(FixRequest).where(FixRequest.scan_id == scan_id)).first()
             if fix is None:
                 raise HTTPException(status_code=404, detail="sin petición de corrección")
-            return _fix_summary(fix)
+            return _fix_summary(fix, db.cipher)
 
     return app
 
 
-def _fix_summary(fix: FixRequest) -> dict:
+def _fix_summary(fix: FixRequest, cipher=None) -> dict:
     return {"id": fix.id, "scan_id": fix.scan_id, "status": fix.status, "pr_url": fix.pr_url,
-            "error": fix.error, "detail": fix.detail, "requested_by": fix.requested_by}
+            "error": fix.error, "detail": unseal(cipher, fix.detail), "requested_by": fix.requested_by}
 
 
 def _scan_summary(scan: Scan) -> dict:

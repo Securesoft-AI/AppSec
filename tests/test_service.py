@@ -357,6 +357,33 @@ def test_fix_button_ignores_other_repositories_and_actions(env, monkeypatch):
     assert "ignored" in r.json()
 
 
+def test_results_and_triage_cache_are_encrypted_at_rest(tmp_path, private_key, monkeypatch):
+    from cryptography.fernet import Fernet
+    from sqlalchemy import text
+
+    from appsec_ai.service.crypto import Cipher
+
+    monkeypatch.setenv("ADMIN_API_TOKEN", "admin-token")
+    settings = Settings(database_url=f"sqlite:///{tmp_path / 'db.sqlite'}", github_app_id="123",
+                        github_private_key=private_key, github_webhook_secret=SECRET, ai_triage=False,
+                        workdir=str(tmp_path), ai_cache_dir=str(tmp_path / "cache"))
+    db = Database(settings.database_url, Cipher(Fernet.generate_key().decode()))
+    client = TestClient(create_app(settings, db))
+    install(client)
+    scan_id = open_pr(client).json()["scan"]
+    worker, _ = fix_worker(settings, db, FakeGitHub(["app.py"]), monkeypatch)
+    worker.run_once()
+
+    with db.engine.connect() as conn:
+        raw = conn.execute(text("SELECT result FROM scans WHERE id = :i"), {"i": scan_id}).scalar_one()
+    assert "eval(answer)" not in raw and "app.py" not in raw
+    r = client.get(f"/api/scans/{scan_id}", headers={"Authorization": "Bearer admin-token"})
+    assert any("eval(answer)" in f["snippet"] for f in r.json()["result"]["findings"])
+
+    cached = list((tmp_path / "cache").rglob("*.json"))
+    assert cached and all(b"true_positive" not in p.read_bytes() for p in cached)
+
+
 def test_check_rerun_requeues_scan(env, monkeypatch):
     settings, db, client = env
     install(client)

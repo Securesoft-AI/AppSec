@@ -56,9 +56,21 @@ def which(binary: str) -> str | None:
     return str(candidate) if candidate.exists() else None
 
 
+# Variables que necesitan los motores externos. Todo lo demás (claves de la GitHub App, de Anthropic,
+# de la base de datos...) se queda fuera: los motores procesan código no confiable.
+SAFE_ENV = {"PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "TMPDIR", "TZ", "SSL_CERT_FILE", "SSL_CERT_DIR",
+            "REQUESTS_CA_BUNDLE", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy",
+            "SEMGREP_SEND_METRICS", "SEMGREP_ENABLE_VERSION_CHECK", "PYTHONDONTWRITEBYTECODE"}
+
+
+def safe_env(**extra: str) -> dict[str, str]:
+    """Entorno mínimo para procesos que tocan código del cliente."""
+    return {**{k: v for k, v in os.environ.items() if k in SAFE_ENV}, **extra}
+
+
 def run_json(cmd: list[str], ok_codes: tuple[int, ...] = (0, 1), timeout: int = 900) -> object:
     """Ejecuta un motor y devuelve su salida JSON. Muchos motores salen con 1 si hay hallazgos."""
-    env = {**os.environ, "NO_COLOR": "1"}
+    env = safe_env(NO_COLOR="1")
     proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=env)
     if proc.returncode not in ok_codes:
         raise EngineError(f"{cmd[0]} salió con {proc.returncode}: {proc.stderr.strip()[-500:]}")

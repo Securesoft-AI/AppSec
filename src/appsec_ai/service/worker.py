@@ -15,8 +15,10 @@ from appsec_ai.scanner import apply_triage
 from appsec_ai.scanner import scan as run_scan
 from appsec_ai.service import render
 from appsec_ai.service.config import Settings
+from appsec_ai.service.crypto import seal, unseal
 from appsec_ai.service.db import Database, FixRequest, Repository, Scan, ScanKind, ScanStatus, utcnow
 from appsec_ai.service.github import GitHubApp, GitHubError
+from appsec_ai.service.sandbox import sandboxed_scan
 
 log = logging.getLogger("appsec_ai.worker")
 MAX_ATTEMPTS = 3
@@ -33,12 +35,17 @@ def filter_to_files(result: ScanResult, files: set[str]) -> ScanResult:
 
 
 class Worker:
-    def __init__(self, settings: Settings, db: Database, github: GitHubApp, scanner=run_scan, triager_factory=None):
+    def __init__(self, settings: Settings, db: Database, github: GitHubApp, scanner=None, triager_factory=None):
         self.settings = settings
         self.db = db
         self.github = github
-        self.scanner = scanner
+        self.scanner = scanner or self._default_scanner
         self.triager_factory = triager_factory or self._default_triager
+
+    def _default_scanner(self, src: Path) -> ScanResult:
+        if self.settings.scan_sandbox == "none":
+            return run_scan(src)
+        return sandboxed_scan(src, self.settings.scan_sandbox_cmd, timeout=self.settings.scan_timeout)
 
     def _default_triager(self, max_requests: int):
         if not self.settings.ai_triage:
@@ -112,6 +119,7 @@ class Worker:
                 if self.settings.ai_cache_dir:
                     # Por repositorio: el triage contiene fragmentos del código del cliente.
                     triager.cache_dir = Path(self.settings.ai_cache_dir) / str(repo_id)
+                    triager.cipher = self.db.cipher
                 apply_triage(src, result, triager)
             result.target = repo_name
         finally:
@@ -129,7 +137,7 @@ class Worker:
 
         self._update(
             scan_id, status=ScanStatus.COMPLETED.value, finished_at=utcnow(), error="",
-            result=result.model_dump(mode="json"),
+            result=seal(self.db.cipher, result.model_dump(mode="json")),
             summary={"counts": render.counts(findings), "total": len(findings), "conclusion": conclusion,
                      "llm_usage": result.llm_usage, "files_in_scope": len(changed) if changed is not None else None},
         )
@@ -145,7 +153,8 @@ class Worker:
             sha, pr_number = scan.head_sha, scan.pr_number
             base_branch = scan.ref.removeprefix("refs/heads/") if scan.kind == ScanKind.PULL_REQUEST.value \
                 else repo.default_branch
-            result = ScanResult.model_validate(scan.result) if scan.result else None
+            raw = unseal(self.db.cipher, scan.result)
+            result = ScanResult.model_validate(raw) if raw else None
 
         targets = files_to_fix(render.visible(result)) if result else {}
         if not targets:
@@ -197,7 +206,7 @@ class Worker:
         with self.db.session() as s, s.begin():
             row = s.get(FixRequest, fix_id)
             row.status, row.finished_at, row.error = ScanStatus.COMPLETED.value, utcnow(), ""
-            row.pr_url, row.detail = pr["url"], detail
+            row.pr_url, row.detail = pr["url"], seal(self.db.cipher, detail)
         if pr_number:
             try:
                 gh.upsert_comment(repo_name, pr_number, render.fix_comment(pr["url"], len(fixes)), render.FIX_MARKER)
@@ -209,7 +218,7 @@ class Worker:
         with self.db.session() as s, s.begin():
             row = s.get(FixRequest, fix_id)
             row.status, row.finished_at, row.error = ScanStatus.FAILED.value, utcnow(), error[:2000]
-            row.detail = detail or {}
+            row.detail = seal(self.db.cipher, detail or {})
 
     def _fail_fix(self, fix_id: int, error: Exception):
         with self.db.session() as s, s.begin():

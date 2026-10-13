@@ -101,7 +101,8 @@ class FixRequest(Base):
 
 
 class Database:
-    def __init__(self, url: str):
+    def __init__(self, url: str, cipher=None):
+        self.cipher = cipher  # crypto.Cipher: cifra resultados y detalles con código del cliente
         kwargs = {"connect_args": {"check_same_thread": False}} if url.startswith("sqlite") else {"pool_pre_ping": True}
         self.engine = create_engine(url, **kwargs)
         self.session_factory = sessionmaker(self.engine, expire_on_commit=False)
