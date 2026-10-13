@@ -88,7 +88,7 @@ Leyenda: ✅ hecho · 🔜 MVP · ⏭ posterior
 - ✅ RF‑3.5 Presupuesto máximo de peticiones por escaneo; los ficheros más graves se analizan primero.
 - ✅ RF‑3.6 Resumen ejecutivo de seguridad de IA para el CTO.
 - ✅ RF‑3.7 Botón "Abrir PR con fixes" en el check de GitHub (y `POST /api/scans/{id}/fix-pr`): Claude propone ediciones exactas, se validan (texto único y sintaxis) y se abre un PR para revisión humana. Requiere permiso `contents: write`.
-- 🔜 RF‑3.8 El usuario marca "útil / no útil" en cada hallazgo; ese feedback alimenta el conjunto de evaluación.
+- ✅ RF‑3.8 El usuario marca "útil / no útil" en cada hallazgo desde el panel. El feedback alimenta el conjunto de evaluación (`GET /api/feedback/export`) solo si la organización lo autoriza por contrato (`eval_opt_in`).
 
 ### M4. Plataforma SaaS
 - ✅ RF‑4.1a GitHub App con permisos mínimos (contents: read, checks y pull requests: write), webhooks verificados con HMAC y gestión de instalaciones y repositorios.
@@ -96,7 +96,7 @@ Leyenda: ✅ hecho · 🔜 MVP · ⏭ posterior
 - ✅ RF‑4.2 Escaneo en cada PR (check con anotaciones en las líneas, comentario único que se actualiza, solo ficheros modificados) y escaneo completo en cada push a la rama por defecto. Reintentos y botón "Re-run".
 - ✅ RF‑4.2b Cola de escaneos en Postgres con varios workers, idempotente frente a reenvíos de webhooks.
 - ✅ RF‑4.2c API REST de instalaciones, repositorios y escaneos (acceso provisional con token de administrador).
-- 🔜 RF‑4.3 Panel por organización: hallazgos por severidad, repositorio, área y tendencia; inventario de IA.
+- ✅ RF‑4.3 Panel por organización (`/app`): hallazgos por severidad, repositorio, área y tendencia de 30 días; inventario de IA; detalle por repositorio con botón de fixes.
 - 🟡 RF‑4.4 Multi‑tenant: datos separados por instalación; clonado seguro (sin hooks, LFS ni enlaces simbólicos, token fuera de los argumentos), workdir temporal que siempre se borra, worker sin privilegios. Falta aislar cada escaneo en su propio contenedor efímero (gVisor/Firecracker).
 - 🔜 RF‑4.5 Facturación con Stripe (planes, límites de uso, prueba gratuita de 14 días).
 - 🔜 RF‑4.6 Interfaz y correos en inglés y español.

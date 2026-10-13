@@ -1,0 +1,390 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Atalaya · Panel</title>
+<link rel="icon" href="data:,">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+:root {
+  --paper: #f3f5f4; --surface: #ffffff; --ink: #12232a; --muted: #55666c; --line: #d5dddb;
+  --accent: #0d5f5c; --accent-ink: #ffffff; --accent-soft: #dcebe8; --series: #00917f;
+  --crit: #b4321f; --crit-soft: #fbe6e1; --warn: #9a5b00; --warn-soft: #fbefd9; --code-bg: #f7f9f8;
+  --font-display: "Bricolage Grotesque", "Avenir Next", "Segoe UI", sans-serif;
+  --font-body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+  --radius: 10px;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #0f1719; --surface: #162124; --ink: #e4ecea; --muted: #94a6a5; --line: #29393c;
+    --accent: #5cc0b5; --accent-ink: #062321; --accent-soft: #173a38; --series: #35cbbd;
+    --crit: #ff8a72; --crit-soft: #3a1c17; --warn: #f2b25c; --warn-soft: #382a14; --code-bg: #121c1e;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --paper: #0f1719; --surface: #162124; --ink: #e4ecea; --muted: #94a6a5; --line: #29393c;
+  --accent: #5cc0b5; --accent-ink: #062321; --accent-soft: #173a38; --series: #35cbbd;
+  --crit: #ff8a72; --crit-soft: #3a1c17; --warn: #f2b25c; --warn-soft: #382a14; --code-bg: #121c1e;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--paper); color: var(--ink); font: 15px/1.55 var(--font-body); }
+h1, h2, h3 { font-family: var(--font-display); margin: 0; letter-spacing: -0.01em; line-height: 1.15; }
+h1 { font-size: 1.5rem; } h2 { font-size: 1.1rem; margin-bottom: 12px; }
+code, .mono { font-family: var(--font-mono); font-size: 0.9em; }
+a { color: var(--accent); }
+button, select { font: inherit; color: inherit; }
+.wrap { max-width: 1160px; margin: 0 auto; padding: 0 16px; }
+header { border-bottom: 1px solid var(--line); background: var(--surface); }
+header .wrap { display: flex; align-items: center; gap: 12px; padding-block: 12px; flex-wrap: wrap; }
+.brand { font-family: var(--font-display); font-weight: 800; font-size: 1.2rem; margin-right: auto; }
+.btn { text-decoration: none; display: inline-block; border: 1px solid var(--line); background: var(--surface); border-radius: 8px; padding: 6px 12px; cursor: pointer; }
+.btn:hover { border-color: var(--accent); }
+.btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.btn[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); }
+select { border: 1px solid var(--line); background: var(--surface); border-radius: 8px; padding: 6px 8px; max-width: 100%; }
+main.wrap { padding-block: 24px 48px; display: grid; gap: 20px; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px; min-width: 0; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; }
+.tile { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; }
+.tile .k { color: var(--muted); font-size: 0.85rem; display: flex; gap: 6px; align-items: center; }
+.tile .v { font-family: var(--font-display); font-size: 2rem; font-weight: 800; line-height: 1.1; margin-top: 4px; }
+.sev { display: inline-flex; align-items: center; gap: 6px; font-size: 0.82rem; font-weight: 600; white-space: nowrap; }
+.sev::before { content: ""; width: 9px; height: 9px; border-radius: 2px; background: currentColor; }
+.sev-critical, .sev-high { color: var(--crit); } .sev-medium { color: var(--warn); } .sev-low, .sev-info { color: var(--muted); }
+.grid2 { display: grid; grid-template-columns: 2fr 1fr; gap: 20px; }
+@media (max-width: 820px) { .grid2 { grid-template-columns: 1fr; } }
+table { width: 100%; border-collapse: collapse; font-size: 0.92rem; }
+th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { color: var(--muted); font-weight: 500; font-size: 0.82rem; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+.scroll { overflow-x: auto; }
+tr.link { cursor: pointer; } tr.link:hover td { background: var(--accent-soft); }
+.muted { color: var(--muted); }
+.chart { position: relative; }
+.chart svg { display: block; width: 100%; height: 220px; overflow: visible; }
+.chart { min-height: 220px; }
+.chart .grid line { stroke: var(--line); stroke-width: 1; }
+.chart .axis text { fill: var(--muted); font-size: 11px; font-family: var(--font-body); }
+.chart .line { fill: none; stroke: var(--series); stroke-width: 2; stroke-linejoin: round; }
+.chart .area { fill: var(--series); opacity: 0.12; }
+.chart .cross { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 3 3; }
+.chart .dot { fill: var(--series); stroke: var(--surface); stroke-width: 2; }
+.tip { position: absolute; pointer-events: none; background: var(--surface); border: 1px solid var(--line); border-radius: 8px;
+       padding: 8px 10px; font-size: 0.82rem; box-shadow: 0 4px 16px rgb(0 0 0 / 0.12); min-width: 150px; }
+.tip b { display: block; margin-bottom: 4px; }
+.tip .row { display: flex; justify-content: space-between; gap: 12px; }
+.finding { border-top: 1px solid var(--line); padding: 14px 0; }
+.finding:first-child { border-top: 0; }
+.finding h3 { font-family: var(--font-body); font-size: 1rem; font-weight: 600; margin: 4px 0; }
+.finding pre { background: var(--code-bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px; overflow-x: auto; font-size: 0.82rem; margin: 8px 0; }
+.meta { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; color: var(--muted); font-size: 0.85rem; }
+.vote { display: flex; gap: 6px; margin-top: 8px; align-items: center; }
+.empty { text-align: center; padding: 48px 16px; }
+.toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 8px; }
+.toolbar h2 { margin: 0 auto 0 0; }
+.notice { padding: 10px 12px; border-radius: 8px; background: var(--warn-soft); color: var(--ink); }
+[hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap">
+    <span class="brand">Atalaya</span>
+    <select id="inst" aria-label="Organización" hidden></select>
+    <button class="btn" id="lang" type="button">EN</button>
+    <button class="btn" id="logout" type="button" hidden data-i18n="logout">Salir</button>
+  </div>
+</header>
+
+<main class="wrap" id="main">
+  <section class="card empty" id="login" hidden>
+    <h1 data-i18n="login_title">Entra con tu cuenta de GitHub</h1>
+    <p class="muted" data-i18n="login_text">Verás las organizaciones donde está instalada la App y a las que tienes acceso.</p>
+    <a class="btn primary" href="/auth/login" data-i18n="login_button">Entrar con GitHub</a>
+  </section>
+
+  <section id="overview" hidden>
+    <div class="tiles" id="tiles"></div>
+  </section>
+
+  <section class="grid2" id="charts" hidden>
+    <div class="card">
+      <h2 data-i18n="trend_title">Hallazgos abiertos · últimos 30 días</h2>
+      <div class="chart" id="trend"></div>
+      <details><summary class="muted" data-i18n="as_table">Ver como tabla</summary><div class="scroll" id="trend-table"></div></details>
+    </div>
+    <div class="card">
+      <h2 data-i18n="by_area">Por área</h2>
+      <table id="areas"></table>
+    </div>
+  </section>
+
+  <section class="card" id="repos" hidden>
+    <h2 data-i18n="repos">Repositorios</h2>
+    <div class="scroll"><table id="repo-table"></table></div>
+    <p class="muted" id="unscanned"></p>
+  </section>
+
+  <section class="card" id="inventory" hidden>
+    <h2 data-i18n="ai_inventory">Inventario de IA</h2>
+    <div class="scroll"><table id="inv-table"></table></div>
+  </section>
+
+  <section class="card" id="detail" hidden>
+    <div class="toolbar">
+      <h2 id="detail-title"></h2>
+      <button class="btn" id="fix" type="button" data-i18n="fix_pr">Abrir PR con fixes</button>
+      <a class="btn" id="pdf" data-i18n="pdf">Descargar PDF</a>
+      <button class="btn" id="back" type="button" data-i18n="back">Volver</button>
+    </div>
+    <p id="detail-msg" class="notice" hidden></p>
+    <div id="findings"></div>
+  </section>
+</main>
+
+<script>
+"use strict";
+const SEVERITIES = ["critical", "high", "medium", "low", "info"];
+const I18N = {
+  es: {
+    logout: "Salir", login_title: "Entra con tu cuenta de GitHub",
+    login_text: "Verás las organizaciones donde está instalada la App y a las que tienes acceso.",
+    login_button: "Entrar con GitHub", trend_title: "Hallazgos abiertos · últimos 30 días",
+    as_table: "Ver como tabla", by_area: "Por área", repos: "Repositorios", ai_inventory: "Inventario de IA",
+    fix_pr: "Abrir PR con fixes", pdf: "Descargar PDF", back: "Volver",
+    critical: "Crítico", high: "Alto", medium: "Medio", low: "Bajo", info: "Info", total: "Total",
+    repo: "Repositorio", last_scan: "Último escaneo", date: "Fecha", kind: "Tipo", component: "Componente", where: "Ubicación",
+    area_ai: "Seguridad de IA", area_sast: "Código (SAST)", area_secrets: "Secretos", area_sca: "Dependencias", area_iac: "Infraestructura (IaC)",
+    no_findings: "Sin hallazgos abiertos.", no_installs: "Ninguna organización con la App instalada a la que tengas acceso.",
+    unscanned: "Sin escanear todavía: ", useful: "Útil", not_useful: "No útil", thanks: "Gracias, lo usaremos para mejorar.",
+    verdict: "Veredicto IA", fix_requested: "Corrección en cola. Aparecerá un PR en el repositorio.",
+    fix_error: "No se pudo pedir la corrección: ", full: "completo", pull_request: "PR", none: "—",
+  },
+  en: {
+    logout: "Sign out", login_title: "Sign in with your GitHub account",
+    login_text: "You'll see the organizations where the App is installed and you have access.",
+    login_button: "Sign in with GitHub", trend_title: "Open findings · last 30 days",
+    as_table: "View as table", by_area: "By area", repos: "Repositories", ai_inventory: "AI inventory",
+    fix_pr: "Open fix PR", pdf: "Download PDF", back: "Back",
+    critical: "Critical", high: "High", medium: "Medium", low: "Low", info: "Info", total: "Total",
+    repo: "Repository", last_scan: "Last scan", date: "Date", kind: "Type", component: "Component", where: "Location",
+    area_ai: "AI security", area_sast: "Code (SAST)", area_secrets: "Secrets", area_sca: "Dependencies", area_iac: "Infrastructure (IaC)",
+    no_findings: "No open findings.", no_installs: "No organizations with the App installed that you can access.",
+    unscanned: "Not scanned yet: ", useful: "Useful", not_useful: "Not useful", thanks: "Thanks, we'll use it to improve.",
+    verdict: "AI verdict", fix_requested: "Fix queued. A PR will appear in the repository.",
+    fix_error: "Couldn't request the fix: ", full: "full", pull_request: "PR", none: "—",
+  },
+};
+let lang = (() => { try { return localStorage.getItem("lang") || (navigator.language || "es").slice(0, 2); } catch { return "es"; } })();
+if (!I18N[lang]) lang = "es";
+const t = (k) => I18N[lang][k] ?? k;
+const $ = (id) => document.getElementById(id);
+
+// El DOM se construye con nodos de texto, nunca interpretando HTML: títulos, rutas y fragmentos vienen del código del cliente.
+function el(tag, attrs = {}, ...children) {
+  const n = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === "class") n.className = v; else if (k.startsWith("on")) n.addEventListener(k.slice(2), v); else n.setAttribute(k, v);
+  }
+  for (const c of children.flat()) n.append(c instanceof Node ? c : document.createTextNode(String(c ?? "")));
+  return n;
+}
+const sevLabel = (s) => el("span", { class: `sev sev-${s}` }, t(s));
+
+async function api(path, opts = {}) {
+  const r = await fetch(path, { credentials: "same-origin", ...opts,
+    headers: { "Content-Type": "application/json", ...(opts.headers || {}) } });
+  if (r.status === 401) { showLogin(); throw new Error("401"); }
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.status);
+  return r.json();
+}
+
+function applyLang() {
+  document.documentElement.lang = lang;
+  document.querySelectorAll("[data-i18n]").forEach((n) => { n.textContent = t(n.dataset.i18n); });
+  $("lang").textContent = lang === "es" ? "EN" : "ES";
+}
+
+function showLogin() {
+  for (const id of ["overview", "charts", "repos", "inventory", "detail", "logout", "inst"]) $(id).hidden = true;
+  $("login").hidden = false;
+}
+
+let me = null, current = null;
+
+async function boot() {
+  applyLang();
+  try { me = await api("/api/me"); } catch { return; }
+  $("logout").hidden = false;
+  const sel = $("inst");
+  sel.replaceChildren(...me.installations.map((i) => el("option", { value: i.id }, i.account)));
+  if (!me.installations.length) {
+    $("main").replaceChildren(el("section", { class: "card empty" }, el("p", {}, t("no_installs"))));
+    return;
+  }
+  sel.hidden = me.installations.length < 2;
+  let saved; try { saved = localStorage.getItem("inst"); } catch {}
+  if (saved && me.installations.some((i) => String(i.id) === saved)) sel.value = saved;
+  await loadDashboard();
+}
+
+async function loadDashboard() {
+  const id = $("inst").value;
+  try { localStorage.setItem("inst", id); } catch {}
+  const d = await api(`/api/installations/${encodeURIComponent(id)}/dashboard`);
+  current = d;
+  $("detail").hidden = true;
+  for (const s of ["overview", "charts", "repos", "inventory"]) $(s).hidden = false;
+  $("inventory").hidden = !d.ai_inventory.length;
+
+  const total = SEVERITIES.reduce((a, s) => a + d.by_severity[s], 0);
+  $("tiles").replaceChildren(
+    el("div", { class: "tile" }, el("div", { class: "k" }, t("total")), el("div", { class: "v" }, total)),
+    ...SEVERITIES.slice(0, 4).map((s) => el("div", { class: "tile" }, el("div", { class: "k" }, sevLabel(s)),
+                                         el("div", { class: "v" }, d.by_severity[s]))));
+
+  $("areas").replaceChildren(...(Object.keys(d.by_category).length
+    ? Object.entries(d.by_category).map(([c, n]) => el("tr", {}, el("td", {}, t(`area_${c}`)), el("td", { class: "num" }, n)))
+    : [el("tr", {}, el("td", { class: "muted" }, t("no_findings")))]));
+
+  renderTrend(d.trend);
+
+  $("repo-table").replaceChildren(
+    el("tr", {}, el("th", {}, t("repo")), ...SEVERITIES.slice(0, 4).map((s) => el("th", { class: "num" }, t(s))),
+       el("th", { class: "num" }, t("total")), el("th", {}, t("last_scan"))),
+    ...d.repositories.map((r) => el("tr", { class: "link", tabindex: "0", onclick: () => openScan(r),
+                                            onkeydown: (e) => { if (e.key === "Enter") openScan(r); } },
+      el("td", {}, r.full_name), ...SEVERITIES.slice(0, 4).map((s) => el("td", { class: "num" }, r[s])),
+      el("td", { class: "num" }, r.total),
+      el("td", { class: "muted" }, r.finished_at ? new Date(r.finished_at).toLocaleDateString(lang) : t("none"), " · ", t(r.kind)))));
+  $("unscanned").textContent = d.repositories_without_scans.length ? t("unscanned") + d.repositories_without_scans.join(", ") : "";
+
+  $("inv-table").replaceChildren(
+    el("tr", {}, el("th", {}, t("kind")), el("th", {}, t("component")), el("th", {}, t("where"))),
+    ...d.ai_inventory.map((c) => el("tr", {}, el("td", {}, c.kind), el("td", {}, c.name),
+      el("td", { class: "mono" }, `${c.repository}/${c.file}:${c.line}`))));
+}
+
+// Tendencia: una serie (hallazgos abiertos), cruceta con desglose por severidad y vista de tabla.
+let lastTrend = null;
+function renderTrend(points) {
+  lastTrend = points;
+  // Se dibuja al ancho real: escalar un viewBox fijo encoge los textos de los ejes en móvil.
+  const W = Math.max(280, Math.round($("trend").clientWidth || 640)), H = 220, P = { l: 34, r: 8, t: 10, b: 24 };
+  const totals = points.map((p) => SEVERITIES.reduce((a, s) => a + p[s], 0));
+  const max = Math.max(4, ...totals);
+  const step = Math.pow(10, Math.floor(Math.log10(max))) * (max / Math.pow(10, Math.floor(Math.log10(max))) > 5 ? 2 : 1);
+  const top = Math.ceil(max / step) * step;
+  const x = (i) => P.l + (i * (W - P.l - P.r)) / Math.max(1, points.length - 1);
+  const y = (v) => P.t + (H - P.t - P.b) * (1 - v / top);
+  const NS = "http://www.w3.org/2000/svg";
+  const s = (tag, attrs) => { const n = document.createElementNS(NS, tag); for (const k in attrs) n.setAttribute(k, attrs[k]); return n; };
+  const svg = s("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": t("trend_title") });
+  const grid = s("g", { class: "grid" }), axis = s("g", { class: "axis" });
+  for (let v = 0; v <= top; v += step) {
+    grid.append(s("line", { x1: P.l, x2: W - P.r, y1: y(v), y2: y(v) }));
+    const lbl = s("text", { x: P.l - 6, y: y(v) + 4, "text-anchor": "end" }); lbl.textContent = v; axis.append(lbl);
+  }
+  [0, Math.floor((points.length - 1) / 2), points.length - 1].forEach((i) => {
+    const lbl = s("text", { x: x(i), y: H - 6, "text-anchor": i === 0 ? "start" : i === points.length - 1 ? "end" : "middle" });
+    lbl.textContent = new Date(points[i].date + "T00:00:00").toLocaleDateString(lang, { day: "numeric", month: "short" });
+    axis.append(lbl);
+  });
+  const path = totals.map((v, i) => `${i ? "L" : "M"}${x(i)},${y(v)}`).join("");
+  svg.append(grid, axis,
+    s("path", { class: "area", d: `${path}L${x(points.length - 1)},${y(0)}L${x(0)},${y(0)}Z` }),
+    s("path", { class: "line", d: path }));
+  const cross = s("line", { class: "cross", y1: P.t, y2: H - P.b, visibility: "hidden" });
+  const dot = s("circle", { class: "dot", r: 5, visibility: "hidden" });
+  svg.append(cross, dot);
+  const tip = el("div", { class: "tip", hidden: "" });
+  const box = $("trend"); box.replaceChildren(svg, tip);
+  const hit = s("rect", { x: P.l, y: 0, width: W - P.l - P.r, height: H, fill: "transparent" });
+  svg.append(hit);
+  const show = (evt) => {
+    const r = svg.getBoundingClientRect();
+    const px = ((evt.clientX - r.left) / r.width) * W;
+    const i = Math.max(0, Math.min(points.length - 1, Math.round(((px - P.l) / (W - P.l - P.r)) * (points.length - 1))));
+    cross.setAttribute("x1", x(i)); cross.setAttribute("x2", x(i)); cross.setAttribute("visibility", "visible");
+    dot.setAttribute("cx", x(i)); dot.setAttribute("cy", y(totals[i])); dot.setAttribute("visibility", "visible");
+    tip.replaceChildren(el("b", {}, new Date(points[i].date + "T00:00:00").toLocaleDateString(lang), " · ", totals[i]),
+      ...SEVERITIES.filter((sv) => points[i][sv]).map((sv) => el("div", { class: "row" }, sevLabel(sv), el("span", {}, points[i][sv]))));
+    tip.hidden = false;
+    const left = (x(i) / W) * r.width;
+    tip.style.left = `${Math.min(r.width - tip.offsetWidth, Math.max(0, left + 12))}px`;
+    tip.style.top = "8px";
+  };
+  hit.addEventListener("pointermove", show);
+  hit.addEventListener("pointerleave", () => { tip.hidden = true; cross.setAttribute("visibility", "hidden"); dot.setAttribute("visibility", "hidden"); });
+
+  $("trend-table").replaceChildren(el("table", {},
+    el("tr", {}, el("th", {}, t("date")), ...SEVERITIES.map((sv) => el("th", { class: "num" }, t(sv))), el("th", { class: "num" }, t("total"))),
+    ...points.map((p, i) => el("tr", {}, el("td", {}, p.date), ...SEVERITIES.map((sv) => el("td", { class: "num" }, p[sv])),
+                               el("td", { class: "num" }, totals[i])))));
+}
+
+async function openScan(repo) {
+  const scan = await api(`/api/scans/${repo.scan_id}`);
+  for (const sct of ["overview", "charts", "repos", "inventory"]) $(sct).hidden = true;
+  $("detail").hidden = false; $("detail-msg").hidden = true;
+  $("detail-title").textContent = repo.full_name;
+  $("pdf").href = `/api/scans/${repo.scan_id}/report.pdf?lang=${lang}`;
+  $("fix").onclick = async () => {
+    try { await api(`/api/scans/${repo.scan_id}/fix-pr`, { method: "POST" }); showMsg(t("fix_requested")); }
+    catch (e) { showMsg(t("fix_error") + e.message); }
+  };
+  const findings = (scan.result?.findings || []).filter((f) => !(f.triage && f.triage.verdict === "false_positive"));
+  $("findings").replaceChildren(...(findings.length ? findings.map((f) => renderFinding(repo.scan_id, f, scan.feedback || {}))
+                                                     : [el("p", { class: "muted" }, t("no_findings"))]));
+  window.scrollTo({ top: 0 });
+}
+
+function renderFinding(scanId, f, feedback) {
+  const sev = f.triage ? f.triage.severity : f.severity;
+  const fp = fingerprint(f);
+  const vote = (useful) => async (evt) => {
+    await api(`/api/scans/${scanId}/feedback`, { method: "POST", body: JSON.stringify({ fingerprint: fp, useful }) });
+    const row = evt.target.parentElement;
+    row.querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", String(b === evt.target)));
+    row.lastChild.textContent = t("thanks");
+  };
+  return el("article", { class: "finding" },
+    el("div", { class: "meta" }, sevLabel(sev), el("span", { class: "mono" }, `${f.file}:${f.line}`), el("span", {}, f.rule_id),
+       f.triage ? el("span", {}, `${t("verdict")}: ${f.triage.verdict} (${Math.round(f.triage.confidence * 100)}%)`) : ""),
+    el("h3", {}, f.title),
+    el("p", {}, f.triage ? f.triage.explanation : f.message),
+    f.triage && f.triage.fix ? el("p", {}, el("b", {}, "→ "), f.triage.fix) : "",
+    f.snippet ? el("pre", {}, f.snippet) : "",
+    el("div", { class: "vote" },
+      el("button", { class: "btn", type: "button", "aria-pressed": String(feedback[fp] === true), onclick: vote(true) }, "👍 " + t("useful")),
+      el("button", { class: "btn", type: "button", "aria-pressed": String(feedback[fp] === false), onclick: vote(false) }, "👎 " + t("not_useful")),
+      el("span", { class: "muted" }, "")));
+}
+
+// Huella estable del hallazgo: la calcula el servidor; aquí llega dentro del JSON.
+const fingerprint = (f) => f.fingerprint;
+
+function showMsg(text) { const m = $("detail-msg"); m.textContent = text; m.hidden = false; }
+
+$("lang").addEventListener("click", () => {
+  lang = lang === "es" ? "en" : "es";
+  try { localStorage.setItem("lang", lang); } catch {}
+  applyLang();
+  if (current && $("detail").hidden) loadDashboard();
+});
+$("inst").addEventListener("change", loadDashboard);
+let resizeTimer;
+window.addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => { if (lastTrend && !$("charts").hidden) renderTrend(lastTrend); }, 150); });
+$("back").addEventListener("click", () => { $("detail").hidden = true; for (const s of ["overview", "charts", "repos", "inventory"]) $(s).hidden = false; $("inventory").hidden = !current.ai_inventory.length; });
+$("logout").addEventListener("click", async () => { await api("/auth/logout", { method: "POST" }).catch(() => {}); location.href = "/app"; });
+boot();
+</script>
+</body>
+</html>

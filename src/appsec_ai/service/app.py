@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import hmac
 import json
 import logging
@@ -19,7 +20,11 @@ from sqlalchemy import select
 from appsec_ai.service.auth import SESSION_COOKIE, SESSION_TTL, STATE_COOKIE, Authenticator, Principal, encode_session, new_state
 from appsec_ai.service.config import Settings, get_settings
 from appsec_ai.service.crypto import Cipher, unseal
-from appsec_ai.service.db import Database, FixRequest, Installation, Repository, Scan, ScanStatus, WaitlistEntry
+from appsec_ai.models import ScanResult
+from appsec_ai.service import dashboard
+from appsec_ai.service.crypto import seal
+from appsec_ai.service.db import (Database, FindingFeedback, FixRequest, Installation, Repository, Scan, ScanStatus,
+                                  WaitlistEntry, utcnow)
 from appsec_ai.service.github import GitHubApp, GitHubError
 from appsec_ai.service.webhooks import handle_event, request_fix, verify_signature
 
@@ -46,6 +51,16 @@ class WaitlistIn(BaseModel):
     lang: str = Field(default="es", max_length=5)
 
 
+class FeedbackIn(BaseModel):
+    fingerprint: str = Field(min_length=1, max_length=64)
+    useful: bool
+    comment: str = Field(default="", max_length=2000)
+
+
+class InstallationSettingsIn(BaseModel):
+    eval_opt_in: bool
+
+
 class RateLimiter:
     """Límite sencillo en memoria por IP (suficiente para una landing con una instancia)."""
 
@@ -62,6 +77,12 @@ class RateLimiter:
             return False
         q.append(now)
         return True
+
+
+def web_file(name: str, env: str = "") -> Path | None:
+    candidates = [Path(os.environ.get(env, "")) if env else Path(""), Path.cwd() / "web" / name,
+                  Path(__file__).resolve().parents[3] / "web" / name]
+    return next((p for p in candidates if str(p) not in ("", ".") and p.is_file()), None)
 
 
 def landing_html() -> str | None:
@@ -92,6 +113,7 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
     callback_url = f"{settings.public_url}/auth/callback"
     waitlist_limiter = RateLimiter(limit=5, window_seconds=600)
     landing = landing_html()
+    panel = web_file("panel/index.html", "PANEL_FILE")
 
     @app.middleware("http")
     async def security_headers(request: Request, call_next):
@@ -173,6 +195,12 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
             raise HTTPException(status_code=404, detail="landing no encontrada")
         return HTMLResponse(landing)
 
+    @app.get("/app", response_class=HTMLResponse, include_in_schema=False)
+    def panel_page():
+        if panel is None:
+            raise HTTPException(status_code=404, detail="panel no encontrado")
+        return HTMLResponse(panel.read_text(encoding="utf-8"))
+
     @app.post("/api/waitlist")
     def join_waitlist(data: WaitlistIn, request: Request):
         ip = request.client.host if request.client else "?"
@@ -246,7 +274,76 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
     def get_scan(scan_id: int, principal: Principal = Depends(auth)):
         with db.session() as s:
             scan = visible_scan(s, principal, scan_id)
-            return {**_scan_summary(scan), "result": unseal(db.cipher, scan.result)}
+            votes = s.scalars(select(FindingFeedback).where(
+                FindingFeedback.repository_id == scan.repository_id,
+                FindingFeedback.user_login == principal.login)).all()
+            return {**_scan_summary(scan), "result": unseal(db.cipher, scan.result),
+                    "feedback": {v.fingerprint: v.useful for v in votes}}
+
+    # -- panel por organización (RF-4.3) ------------------------------------------------------
+
+    @app.get("/api/installations/{installation_id}/dashboard")
+    def installation_dashboard(installation_id: int, principal: Principal = Depends(auth)):
+        if not principal.can_see(installation_id):
+            raise HTTPException(status_code=404, detail="instalación no encontrada")
+        since = utcnow() - dt.timedelta(days=dashboard.TREND_DAYS + 30)
+        with db.session() as s:
+            repos = {r.id: r.full_name for r in s.scalars(
+                select(Repository).where(Repository.installation_id == installation_id, Repository.active))}
+            recent = s.scalars(select(Scan).where(Scan.repository_id.in_(repos), Scan.created_at >= since)).all()
+            # Repos sin escaneos recientes: su último escaneo, aunque sea antiguo.
+            missing = set(repos) - {sc.repository_id for sc in recent}
+            older = s.scalars(select(Scan).where(Scan.repository_id.in_(missing))).all() if missing else []
+            latest_scans = dashboard.latest_per_repo(list(recent) + list(older))
+            results = {rid: ScanResult.model_validate(unseal(db.cipher, sc.result))
+                       for rid, sc in latest_scans.items() if sc.result}
+            data = dashboard.overview(repos, results, latest_scans)
+            data["trend"] = dashboard.trend(list(recent), utcnow().date())
+            data["repositories_without_scans"] = sorted(repos[r] for r in set(repos) - set(latest_scans))
+            return data
+
+    # -- feedback útil / no útil (RF-3.8) --------------------------------------------------------
+
+    @app.post("/api/scans/{scan_id}/feedback")
+    def give_feedback(scan_id: int, data: FeedbackIn, principal: Principal = Depends(auth)):
+        with db.session() as s, s.begin():
+            scan = visible_scan(s, principal, scan_id)
+            repo = s.get(Repository, scan.repository_id)
+            result = ScanResult.model_validate(unseal(db.cipher, scan.result)) if scan.result else None
+            finding = next((f for f in (result.findings if result else []) if f.fingerprint == data.fingerprint), None)
+            if finding is None:
+                raise HTTPException(status_code=404, detail="hallazgo no encontrado en este escaneo")
+            row = s.scalars(select(FindingFeedback).where(
+                FindingFeedback.repository_id == repo.id, FindingFeedback.fingerprint == data.fingerprint,
+                FindingFeedback.user_login == principal.login)).first()
+            if row is None:
+                row = FindingFeedback(installation_id=repo.installation_id, repository_id=repo.id,
+                                      fingerprint=data.fingerprint, user_login=principal.login)
+                s.add(row)
+            row.scan_id, row.rule_id, row.useful, row.comment = scan.id, finding.rule_id, data.useful, data.comment
+            row.finding = seal(db.cipher, finding.model_dump(mode="json"))
+            row.created_at = utcnow()
+        return {"fingerprint": data.fingerprint, "useful": data.useful}
+
+    @app.patch("/api/installations/{installation_id}/settings", dependencies=[Depends(require_admin)])
+    def update_installation_settings(installation_id: int, data: InstallationSettingsIn):
+        """El permiso para usar el feedback en la evaluación es contractual: lo activa operaciones."""
+        with db.session() as s, s.begin():
+            inst = s.get(Installation, installation_id)
+            if inst is None:
+                raise HTTPException(status_code=404, detail="instalación no encontrada")
+            inst.eval_opt_in = data.eval_opt_in
+            return {"id": inst.id, "eval_opt_in": inst.eval_opt_in}
+
+    @app.get("/api/feedback/export", dependencies=[Depends(require_admin)])
+    def export_feedback():
+        """Feedback de las instalaciones que lo autorizan, listo para ampliar evals/triage."""
+        with db.session() as s:
+            rows = s.execute(select(FindingFeedback).join(Installation, Installation.id == FindingFeedback.installation_id)
+                             .where(Installation.eval_opt_in).order_by(FindingFeedback.id)).scalars().all()
+            return [{"rule_id": r.rule_id, "useful": r.useful, "comment": r.comment,
+                     "suggested_label": "true_positive" if r.useful else "false_positive",
+                     "finding": unseal(db.cipher, r.finding)} for r in rows]
 
     @app.post("/api/scans/{scan_id}/fix-pr")
     def create_fix_pr(scan_id: int, principal: Principal = Depends(auth)):

@@ -27,6 +27,8 @@ class Installation(Base):
     account_type: Mapped[str] = mapped_column(String(20), default="Organization")
     plan: Mapped[str] = mapped_column(String(20), default="free")
     active: Mapped[bool] = mapped_column(default=True)
+    # El cliente acepta por escrito que su feedback (con fragmentos de código) mejore el triage.
+    eval_opt_in: Mapped[bool] = mapped_column(default=False)
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     repositories: Mapped[list["Repository"]] = relationship(back_populates="installation", cascade="all, delete-orphan")
@@ -98,6 +100,25 @@ class FixRequest(Base):
     detail: Mapped[dict] = mapped_column(JSON, default=dict)  # ficheros corregidos y descartados
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     finished_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class FindingFeedback(Base):
+    """Un usuario marca un hallazgo como útil o no útil (RF-3.8). Uno por usuario y hallazgo."""
+
+    __tablename__ = "finding_feedback"
+    __table_args__ = (UniqueConstraint("repository_id", "fingerprint", "user_login", name="uq_feedback"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    installation_id: Mapped[int] = mapped_column(ForeignKey("installations.id", ondelete="CASCADE"), index=True)
+    repository_id: Mapped[int] = mapped_column(ForeignKey("repositories.id", ondelete="CASCADE"), index=True)
+    scan_id: Mapped[int] = mapped_column(ForeignKey("scans.id", ondelete="CASCADE"))
+    fingerprint: Mapped[str] = mapped_column(String(64))
+    rule_id: Mapped[str] = mapped_column(String(200))
+    user_login: Mapped[str] = mapped_column(String(200))
+    useful: Mapped[bool] = mapped_column()
+    comment: Mapped[str] = mapped_column(Text, default="")
+    finding: Mapped[dict] = mapped_column(JSON, default=dict)  # copia del hallazgo (cifrada si hay clave)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class WaitlistEntry(Base):
