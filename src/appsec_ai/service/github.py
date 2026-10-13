@@ -58,6 +58,42 @@ class GitHubApp:
         self._tokens[installation_id] = (data["token"], expires)
         return data["token"]
 
+    # -- login de usuarios (OAuth de la GitHub App) -----------------------------------
+
+    def authorize_url(self, client_id: str, redirect_uri: str, state: str) -> str:
+        from urllib.parse import urlencode
+
+        return f"{self.web_url}/login/oauth/authorize?" + urlencode(
+            {"client_id": client_id, "redirect_uri": redirect_uri, "state": state, "allow_signup": "false"})
+
+    def exchange_code(self, client_id: str, client_secret: str, code: str, redirect_uri: str) -> str:
+        """Token de usuario a partir del código de OAuth. Solo se usa durante el login."""
+        r = self.http.post(f"{self.web_url}/login/oauth/access_token", headers={"Accept": "application/json"},
+                           data={"client_id": client_id, "client_secret": client_secret, "code": code,
+                                 "redirect_uri": redirect_uri})
+        self._check(r)
+        token = r.json().get("access_token")
+        if not token:
+            raise GitHubError(f"OAuth rechazado: {r.json().get('error', 'sin token')}")
+        return token
+
+    def user_with_installations(self, user_token: str) -> tuple[dict, list[int]]:
+        """Usuario autenticado y las instalaciones de esta App a las que tiene acceso."""
+        headers = {"Authorization": f"Bearer {user_token}"}
+        r = self.http.get("/user", headers=headers)
+        self._check(r)
+        user = r.json()
+        ids, page = [], 1
+        while True:
+            r = self.http.get("/user/installations", headers=headers, params={"per_page": 100, "page": page})
+            self._check(r)
+            batch = r.json().get("installations", [])
+            ids += [i["id"] for i in batch]
+            if len(batch) < 100:
+                break
+            page += 1
+        return {"id": user["id"], "login": user["login"]}, ids
+
     def installation(self, installation_id: int) -> "InstallationClient":
         return InstallationClient(self, installation_id)
 

@@ -29,7 +29,10 @@ GitHub ──webhook──► API (FastAPI)  ──► Postgres (tabla scans = c
    - **Permisos del repositorio:** Contents *Read & write*, Metadata *Read*, Pull requests *Read & write*, Checks *Read & write*.
      La escritura en Contents solo se usa para el botón **Abrir PR con fixes**: crea una rama `appsec-ai/fix-…` y abre un PR, nunca escribe en ramas existentes. Si un cliente instala la App solo con lectura, el botón explica en el PR qué permiso falta.
    - **Eventos:** Pull request, Push, Check run.
-3. Crea la App y apunta el **App ID** (`GITHUB_APP_ID`).
+3. Crea la App y apunta el **App ID** (`GITHUB_APP_ID`). Para el login del panel, añade como **Callback URL**
+   `https://TU-DOMINIO/auth/callback` y genera un **client secret**: son `GITHUB_CLIENT_ID` y `GITHUB_CLIENT_SECRET`.
+   El panel solo muestra las instalaciones a las que el usuario tiene acceso en GitHub; la lista se actualiza en
+   cada login (la sesión dura 8 horas).
 4. Genera una **clave privada**: se descarga un `.pem`. Para ponerla en una sola línea:
    ```bash
    awk 'NF {sub(/\r/, ""); printf "%s\\n",$0;}' tu-app.private-key.pem
@@ -80,7 +83,6 @@ Coste orientativo para empezar: 20–50 $/mes más el uso de la API de Claude.
   - un contenedor efímero por escaneo (gVisor/Firecracker, p. ej. un Job de Kubernetes o de Cloud Run con
     `runtimeClassName: gvisor`). El subproceso ya no tiene secretos, pero comparte red y sistema de ficheros
     con el worker. Como paso intermedio, ejecuta el worker con el runtime `runsc` de gVisor;
-  - login con GitHub en el panel, que sustituya a `ADMIN_API_TOKEN`;
   - límites por plan.
 
 ## 5. Variables de entorno
@@ -98,7 +100,10 @@ Coste orientativo para empezar: 20–50 $/mes más el uso de la API de Claude.
 | `REPORT_LANGUAGE` | No | `es` o `en` |
 | `FAIL_ON` | No | Severidad que hace fallar el check (por defecto `high`) |
 | `MAX_REPO_MB` | No | Tamaño máximo del repositorio (por defecto 500) |
-| `ADMIN_API_TOKEN` | No | Acceso provisional a la API REST |
+| `ADMIN_API_TOKEN` | No | Acceso de emergencia para operaciones (ve todas las instalaciones). Los clientes entran con GitHub |
+| `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` | Sí (panel) | Credenciales OAuth de la GitHub App, para el login del panel |
+| `SESSION_SECRET` | Sí (panel) | Firma de las cookies de sesión (`openssl rand -hex 32`) |
+| `PUBLIC_URL` | Sí (panel) | URL pública (`https://...`): callback de OAuth, cookies `Secure` y comprobación de `Origin` |
 | `DATA_ENCRYPTION_KEY` | Sí en producción | Clave Fernet para cifrar resultados y caché. Genérala con `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"` |
 | `SCAN_SANDBOX` | No | `subprocess` (por defecto) o `none` (solo desarrollo) |
 | `SCAN_SANDBOX_CMD` | No | Envoltorio del escaneo aislado (bubblewrap, firejail...). `{src}` es el directorio del escaneo |

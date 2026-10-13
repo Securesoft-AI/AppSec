@@ -14,5 +14,13 @@
     "pull_requests": "write",
     "checks": "write"
   },
-  "default_events": ["pull_request", "push", "check_run"]
+  "default_events": [
+    "pull_request",
+    "push",
+    "check_run"
+  ],
+  "callback_urls": [
+    "https://TU-DOMINIO/auth/callback"
+  ],
+  "request_oauth_on_install": false
 }

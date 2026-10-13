@@ -31,6 +31,13 @@ class Settings:
     max_repo_mb: int = field(default_factory=lambda: int(_env("MAX_REPO_MB", "500")))
     clone_timeout: int = field(default_factory=lambda: int(_env("CLONE_TIMEOUT", "300")))
     workdir: str = field(default_factory=lambda: _env("WORKDIR", ""))
+    # Login con GitHub en el panel (OAuth de la GitHub App).
+    github_client_id: str = field(default_factory=lambda: _env("GITHUB_CLIENT_ID"))
+    github_client_secret: str = field(default_factory=lambda: _env("GITHUB_CLIENT_SECRET"))
+    # Firma de las cookies de sesión. Larga y aleatoria: openssl rand -hex 32.
+    session_secret: str = field(default_factory=lambda: _env("SESSION_SECRET"))
+    # URL pública del servicio (https://...), para el callback de OAuth y la comprobación de Origin.
+    public_url: str = field(default_factory=lambda: _env("PUBLIC_URL", "http://localhost:8000").rstrip("/"))
     # Aislamiento del escaneo: "subprocess" (por defecto) o "none" (solo para desarrollo).
     scan_sandbox: str = field(default_factory=lambda: _env("SCAN_SANDBOX", "subprocess"))
     # Envoltorio opcional del subproceso, p. ej. "bwrap --unshare-all --share-net ... --bind {src} {src}".

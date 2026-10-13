@@ -92,7 +92,7 @@ Leyenda: ✅ hecho · 🔜 MVP · ⏭ posterior
 
 ### M4. Plataforma SaaS
 - ✅ RF‑4.1a GitHub App con permisos mínimos (contents: read, checks y pull requests: write), webhooks verificados con HMAC y gestión de instalaciones y repositorios.
-- 🔜 RF‑4.1b Inicio de sesión con GitHub en el panel web.
+- ✅ RF‑4.1b Inicio de sesión con GitHub (OAuth de la GitHub App): cada usuario solo ve las instalaciones a las que tiene acceso en GitHub.
 - ✅ RF‑4.2 Escaneo en cada PR (check con anotaciones en las líneas, comentario único que se actualiza, solo ficheros modificados) y escaneo completo en cada push a la rama por defecto. Reintentos y botón "Re-run".
 - ✅ RF‑4.2b Cola de escaneos en Postgres con varios workers, idempotente frente a reenvíos de webhooks.
 - ✅ RF‑4.2c API REST de instalaciones, repositorios y escaneos (acceso provisional con token de administrador).
