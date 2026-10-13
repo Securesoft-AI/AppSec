@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 
 from appsec_ai.models import Finding, ScanResult
+from appsec_ai.scanner import apply_triage
 from appsec_ai.scanner import scan as run_scan
 from appsec_ai.service import render
 from appsec_ai.service.config import Settings
@@ -97,9 +98,7 @@ class Worker:
                 result = filter_to_files(result, changed)
             triager = self.triager_factory(max_req)
             if triager is not None and result.findings:
-                triager.triage(src, result.findings)
-                result.ai_summary = triager.summarize(result.ai_inventory, result.findings)
-                result.llm_usage = dict(triager.usage)
+                apply_triage(src, result, triager)
             result.target = repo_name
         finally:
             shutil.rmtree(workdir, ignore_errors=True)

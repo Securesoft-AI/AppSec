@@ -184,6 +184,35 @@ def test_triage_respects_budget():
     assert any("Presupuesto" in w for w in warnings)
 
 
+def test_triage_llm_errors_become_warnings_not_crashes():
+    client = fake_client()
+    create = client.beta.messages.create
+
+    def refuse_summary(**kwargs):
+        response = create(**kwargs)
+        if "format" not in kwargs["output_config"]:
+            response.stop_reason = "refusal"
+        return response
+
+    client.beta.messages.create = refuse_summary
+    result = scan(FIXTURE, engines=["ai-security"], triager=Triager(client=client))
+    assert all(f.triage for f in result.findings)
+    assert result.ai_summary == ""
+    assert any(e.engine == "triage" and "resumen" in e.detail for e in result.engines)
+
+
+def test_cli_ai_triage_without_credentials_fails_cleanly(monkeypatch, capsys, tmp_path):
+    for var in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_PROFILE", "ANTHROPIC_CONFIG_DIR"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    from appsec_ai.cli import main
+
+    with pytest.raises(SystemExit) as e:
+        main(["scan", str(FIXTURE), "--engines", "ai-security", "--ai-triage"])
+    assert e.value.code == 2
+    assert "ANTHROPIC_API_KEY" in capsys.readouterr().err
+
+
 def test_triage_untrusted_code_is_marked_as_data():
     client = fake_client()
     Triager(client=client).triage(FIXTURE, AISecurityEngine().run(FIXTURE)[:1])

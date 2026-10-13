@@ -118,6 +118,12 @@ class Triager:
         self.cache_dir = cache_dir
         self.requests = 0
         self.usage: dict[str, int] = defaultdict(int)
+        self.warnings: list[str] = []
+
+    def has_credentials(self) -> bool:
+        """El SDK solo detecta la falta de credenciales al enviar la primera petición."""
+        c = self.client
+        return bool(getattr(c, "api_key", None) or getattr(c, "auth_token", None) or getattr(c, "credentials", None))
 
     # -- API ------------------------------------------------------------------------
 
@@ -141,6 +147,7 @@ class Triager:
                 self._triage_file(target, rel, pending)
             except (anthropic.APIError, ValidationError, ValueError) as e:
                 warnings.append(f"Error en el triage de {rel}: {e}")
+        self.warnings += warnings
         return warnings
 
     def summarize(self, inventory: list[AIComponent], findings: list[Finding]) -> str:
@@ -155,12 +162,16 @@ class Triager:
                 for f in relevant
             ],
         }
-        response = self._call(
-            SUMMARY_SYSTEM,
-            f"Idioma de respuesta: {self.language}\n\n<datos>\n{json.dumps(payload, ensure_ascii=False)}\n</datos>",
-            output_schema=None,
-            max_tokens=4000,
-        )
+        try:
+            response = self._call(
+                SUMMARY_SYSTEM,
+                f"Idioma de respuesta: {self.language}\n\n<datos>\n{json.dumps(payload, ensure_ascii=False)}\n</datos>",
+                output_schema=None,
+                max_tokens=4000,
+            )
+        except (anthropic.APIError, ValueError) as e:
+            self.warnings.append(f"Error en el resumen ejecutivo: {e}")
+            return ""
         return "".join(b.text for b in response.content if b.type == "text").strip()
 
     # -- internos ---------------------------------------------------------------------

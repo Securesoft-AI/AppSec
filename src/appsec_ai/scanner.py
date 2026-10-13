@@ -43,14 +43,19 @@ def scan(target: Path, engines: list[str] | None = None, triager: Triager | None
         result.ai_inventory = ai_engine.inventory
 
     if triager:
-        warnings = triager.triage(target, result.findings)
-        result.ai_summary = triager.summarize(result.ai_inventory, result.findings)
-        result.llm_usage = dict(triager.usage)
-        for w in warnings:
-            result.engines.append(EngineRun(engine="triage", status="error", detail=w))
+        apply_triage(target, result, triager)
 
     result.findings.sort(key=lambda f: (-f.effective_severity.rank, f.file, f.line))
     return result
+
+
+def apply_triage(target: Path, result: ScanResult, triager: Triager):
+    """Triage y resumen ejecutivo. Los errores del LLM quedan como avisos, nunca abortan el escaneo."""
+    triager.triage(target, result.findings)
+    result.ai_summary = triager.summarize(result.ai_inventory, result.findings)
+    result.llm_usage = dict(triager.usage)
+    for w in triager.warnings:
+        result.engines.append(EngineRun(engine="triage", status="error", detail=w))
 
 
 SUPPRESSION = re.compile(r"(?i)(\bnosec\b|\bnosemgrep\b|appsec-ai:\s*ignore)")

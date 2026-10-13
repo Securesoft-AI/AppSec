@@ -48,6 +48,8 @@ def main(argv: list[str] | None = None) -> int:
             model=args.model or DEFAULT_MODEL, effort=args.effort, language=args.lang,
             max_requests=args.max_requests, cache_dir=args.path / ".appsec-ai-cache",
         )
+        if not triager.has_credentials():
+            p.error("--ai-triage necesita credenciales de Anthropic (define ANTHROPIC_API_KEY)")
 
     engines = [e.strip() for e in args.engines.split(",") if e.strip()]
     unknown = set(engines) - set(ALL_ENGINES)
