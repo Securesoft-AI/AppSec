@@ -18,7 +18,9 @@ ALL_ENGINES = {
 }
 
 
-def scan(target: Path, engines: list[str] | None = None, triager: Triager | None = None) -> ScanResult:
+def scan(target: Path, engines: list[str] | None = None, triager: Triager | None = None,
+         only_files: set[str] | None = None) -> ScanResult:
+    """`only_files`: escaneo incremental (p. ej. los ficheros de un PR). None = todo el repositorio."""
     target = target.resolve()
     result = ScanResult(target=str(target))
     ai_engine: AISecurityEngine | None = None
@@ -29,12 +31,13 @@ def scan(target: Path, engines: list[str] | None = None, triager: Triager | None
             result.engines.append(EngineRun(engine=name, status="skipped", detail="no instalado"))
             continue
         try:
-            found = engine.run(target)
+            found = engine.run(target, only_files)
         except (EngineError, OSError) as e:
             result.engines.append(EngineRun(engine=name, status="error", detail=str(e)[:300]))
             continue
         result.findings += found
-        result.engines.append(EngineRun(engine=name, status="ok", findings=len(found)))
+        detail = f"incremental: {len(only_files)} ficheros" if only_files is not None else ""
+        result.engines.append(EngineRun(engine=name, status="ok", findings=len(found), detail=detail))
         if isinstance(engine, AISecurityEngine):
             ai_engine = engine
 

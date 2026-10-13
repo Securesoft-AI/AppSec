@@ -60,7 +60,7 @@ Leyenda: ✅ hecho · 🔜 MVP · ⏭ posterior
 - ✅ RF‑1.7 41 reglas SAST propias para Opengrep (Python 14, JS/TS 13, Java 8, Go 6), cada una con casos positivos y negativos. **Prohibido** usar reglas del registro de Semgrep (licencia incompatible con SaaS).
 - ✅ RF‑1.9 Fusión de hallazgos duplicados entre motores (misma línea y familia de CWE).
 - ✅ RF‑1.10 Supresión en el código con `appsec-ai: ignore`, `nosec` o `nosemgrep`.
-- 🔜 RF‑1.8 Escaneo incremental: en un PR solo se analizan los ficheros cambiados.
+- ✅ RF‑1.8 Escaneo incremental: en un PR los motores solo analizan los ficheros cambiados (Gitleaks y Checkov sobre una copia mínima; OSV solo si cambia algún manifiesto de dependencias). Un PR de más de 3.000 ficheros se escanea entero.
 
 ### M2. Seguridad de IA (diferenciador)
 - ✅ RF‑2.1 Inventario de IA: SDKs (Anthropic, OpenAI, Gemini, Bedrock, Mistral…), frameworks (LangChain/LangGraph, LlamaIndex, CrewAI, Agents SDK, MCP), modelos usados, herramientas de agentes y vector stores.

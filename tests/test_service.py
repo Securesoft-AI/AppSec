@@ -169,8 +169,13 @@ def make_worker(settings, db, fake, monkeypatch, clone=None, triager_factory=Non
     def fake_clone(self, repo, sha, dest, timeout=300):
         shutil.copytree(FIXTURE, dest)
     monkeypatch.setattr(InstallationClient, "clone", clone or fake_clone)
-    return Worker(settings, db, app, scanner=lambda p: run_scan(p, engines=["ai-security"]),
-                  triager_factory=triager_factory)
+    def scanner(p, only_files=None):
+        scanner.calls.append(only_files)
+        return run_scan(p, engines=["ai-security"], only_files=only_files)
+    scanner.calls = []
+    worker = Worker(settings, db, app, scanner=scanner, triager_factory=triager_factory)
+    worker.scan_calls = scanner.calls
+    return worker
 
 
 def test_worker_scans_pr_and_reports_only_changed_files(env, monkeypatch):
@@ -182,6 +187,7 @@ def test_worker_scans_pr_and_reports_only_changed_files(env, monkeypatch):
 
     assert worker.run_once() is True
     assert worker.run_once() is False  # cola vacía
+    assert worker.scan_calls == [{"app.py"}]  # escaneo incremental: solo los ficheros del PR
 
     with db.session() as s:
         scan = s.get(Scan, scan_id)

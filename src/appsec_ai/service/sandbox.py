@@ -40,17 +40,25 @@ def _limits(cpu_seconds: int, max_file_mb: int):
     return apply
 
 
-def build_command(src: Path, wrapper: str = "") -> list[str]:
+def build_command(src: Path, wrapper: str = "", files_from: Path | None = None) -> list[str]:
     """`wrapper` admite {src} para montar solo el directorio del escaneo (bubblewrap, firejail...)."""
     # -I: modo aislado de Python. Sin él, un `json.py` o un paquete `appsec_ai/` en el repositorio del
     # cliente se importaría en lugar del nuestro (el directorio actual entra en sys.path con -m).
     scan = [sys.executable, "-I", "-m", "appsec_ai.cli", "scan", str(src), "--format", "json"]
+    if files_from is not None:
+        scan += ["--files-from", str(files_from)]
     return [part.replace("{src}", str(src)) for part in shlex.split(wrapper)] + scan
 
 
-def sandboxed_scan(src: Path, wrapper: str = "", timeout: int = 900, max_file_mb: int = 512) -> ScanResult:
+def sandboxed_scan(src: Path, wrapper: str = "", timeout: int = 900, max_file_mb: int = 512,
+                   only_files: set[str] | None = None) -> ScanResult:
+    files_from = None
+    if only_files is not None:
+        # Fuera del directorio del repositorio, para que el código del cliente no lo pueda alterar.
+        files_from = src.parent / "appsec-ai-files.txt"
+        files_from.write_text("\n".join(sorted(only_files)))
     proc = subprocess.Popen(
-        build_command(src, wrapper), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        build_command(src, wrapper, files_from), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
         env=safe_env(SEMGREP_SEND_METRICS="off", PYTHONDONTWRITEBYTECODE="1"), cwd=src.parent,
         start_new_session=True, preexec_fn=_limits(timeout, max_file_mb),
     )

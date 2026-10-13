@@ -27,6 +27,8 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("-o", "--output", type=Path, help="Fichero de salida (por defecto, stdout)")
     s.add_argument("--fail-on", default=None, choices=[x.value for x in Severity],
                    help="Sale con código 1 si hay hallazgos de esta severidad o superior (para CI)")
+    s.add_argument("--files-from", type=Path,
+                   help="Escaneo incremental: fichero con las rutas relativas a analizar, una por línea")
     s.add_argument("--show-suppressed", action="store_true", help="Incluye los falsos positivos descartados")
 
     sv = sub.add_parser("serve", help="Arranca la API (webhooks de GitHub y API REST)")
@@ -56,7 +58,10 @@ def main(argv: list[str] | None = None) -> int:
     if unknown:
         p.error(f"motores desconocidos: {', '.join(sorted(unknown))}")
 
-    result = scan(args.path, engines=engines, triager=triager)
+    only = None
+    if args.files_from:
+        only = {line.strip() for line in args.files_from.read_text().splitlines() if line.strip()}
+    result = scan(args.path, engines=engines, triager=triager, only_files=only)
 
     if args.format == "pdf":
         if not args.output:

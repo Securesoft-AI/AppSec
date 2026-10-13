@@ -5,7 +5,9 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 from abc import ABC, abstractmethod
+from contextlib import contextmanager
 from pathlib import Path
 
 from appsec_ai.models import Finding
@@ -43,8 +45,28 @@ class Engine(ABC):
         return which(self.binary) if self.binary else None
 
     @abstractmethod
-    def run(self, target: Path) -> list[Finding]:
+    def run(self, target: Path, only: set[str] | None = None) -> list[Finding]:
+        """`only`: rutas relativas a analizar (escaneo incremental de un PR). None = todo el repositorio."""
         ...
+
+
+@contextmanager
+def staged(target: Path, only: set[str]):
+    """Copia mínima con solo los ficheros indicados, para motores que analizan directorios enteros.
+
+    Las rutas relativas se conservan, así que los hallazgos apuntan a los mismos ficheros.
+    Se ignoran enlaces simbólicos y rutas que salgan del repositorio.
+    """
+    root = target.resolve()
+    with tempfile.TemporaryDirectory(prefix="appsec-ai-staged-") as tmp:
+        for rel in only:
+            src = (root / rel)
+            if src.is_symlink() or not src.is_file() or not src.resolve().is_relative_to(root):
+                continue
+            dest = Path(tmp) / rel
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(src, dest)
+        yield Path(tmp)
 
 
 def which(binary: str) -> str | None:

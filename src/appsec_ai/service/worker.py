@@ -24,6 +24,7 @@ from appsec_ai.service.sandbox import sandboxed_scan
 
 log = logging.getLogger("appsec_ai.worker")
 MAX_ATTEMPTS = 3
+MAX_INCREMENTAL_FILES = 3000  # límite de la API de GitHub para los ficheros de un PR
 
 
 def dir_size_mb(path: Path) -> float:
@@ -44,10 +45,11 @@ class Worker:
         self.scanner = scanner or self._default_scanner
         self.triager_factory = triager_factory or self._default_triager
 
-    def _default_scanner(self, src: Path) -> ScanResult:
+    def _default_scanner(self, src: Path, only_files: set[str] | None = None) -> ScanResult:
         if self.settings.scan_sandbox == "none":
-            return run_scan(src)
-        return sandboxed_scan(src, self.settings.scan_sandbox_cmd, timeout=self.settings.scan_timeout)
+            return run_scan(src, only_files=only_files)
+        return sandboxed_scan(src, self.settings.scan_sandbox_cmd, timeout=self.settings.scan_timeout,
+                              only_files=only_files)
 
     def _language(self, s, installation_id: int) -> str:
         inst = s.get(Installation, installation_id)
@@ -112,7 +114,7 @@ class Worker:
                 raise RuntimeError(f"el repositorio ocupa {size:.0f} MB (máximo {self.settings.max_repo_mb} MB)")
 
             if kind == ScanKind.PULL_REQUEST.value:
-                changed = set(gh.pull_request_files(repo_name, pr_number))
+                changed = set(gh.pull_request_files(repo_name, pr_number, limit=MAX_INCREMENTAL_FILES))
                 max_req = self.settings.ai_max_requests_pr
             else:
                 changed = None
@@ -120,7 +122,10 @@ class Worker:
 
             # El triage con IA solo se aplica a lo que se va a mostrar: primero se escanea sin IA,
             # se filtra por ficheros del PR y después se analiza con IA lo que queda.
-            result = self.scanner(src)
+            # RF-1.8: en un PR los motores solo analizan los ficheros cambiados. Un PR enorme (la API de
+            # GitHub no lista más de 3000 ficheros) se escanea entero y se filtra después.
+            incremental = changed is not None and len(changed) < MAX_INCREMENTAL_FILES
+            result = self.scanner(src, only_files=changed if incremental else None)
             if changed is not None:
                 result = filter_to_files(result, changed)
             # El plan decide si hay triage con IA y cuántas peticiones quedan este mes.
