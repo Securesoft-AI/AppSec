@@ -100,9 +100,10 @@ RULES = {r.id: r for r in [
 
 # Patrones de secretos dentro de prompts (LLM07).
 SECRET_IN_TEXT = re.compile(
-    r"(?i)(?:api[_ -]?key|password|passwd|contraseña|secret|token|credential|credencial)\w*"
+    r"(?i)(?:api[_ -]?key|password|passwd|contraseña|clave|secret|token|credential|credencial)\w*"
     r"[^\n.:=]{0,40}?(?:\bis|\bes|:|=)\s*[\"']?(?=[A-Za-z0-9_\-+/]*\d)[A-Za-z0-9_\-+/]{8,}"
-    r"|\bsk-[A-Za-z0-9_\-]{16,}|\bAKIA[0-9A-Z]{16}\b|\bgh[pousr]_[A-Za-z0-9]{30,}"
+    r"|\bsk-[A-Za-z0-9_\-]{16,}|\b[sr]k_(?:live|test)_[A-Za-z0-9]{16,}|\bAKIA[0-9A-Z]{16}\b"
+    r"|\bgh[pousr]_[A-Za-z0-9]{30,}"
 )
 
 # Operaciones peligrosas dentro de herramientas de agentes (LLM06), por nombre de llamada.

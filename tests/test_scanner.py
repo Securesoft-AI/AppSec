@@ -70,6 +70,17 @@ def test_agents_mcp_and_new_rules():
     }
 
 
+@pytest.mark.parametrize("text, expected", [
+    ("Usa la clave sk_" "live_51HxQe2LkT9vRmW3pZaB7cD8 para la API", True),   # Stripe (partida para push protection)
+    ("La clave de acceso es Abc12345xyz", True),
+    ("La palabra clave es importante para el SEO", False),
+    ("Tu token tiene este formato: token = 'YOUR_API_TOKEN_HERE'", False),
+])
+def test_secret_in_prompt_patterns(text, expected):
+    from appsec_ai.engines.ai_common import SECRET_IN_TEXT
+    assert bool(SECRET_IN_TEXT.search(text)) is expected
+
+
 def test_agents_inventory_names_tools():
     engine = AISecurityEngine()
     engine.run(AGENTS)

@@ -95,6 +95,17 @@ Opciones del triage con IA:
 
 Los resultados del triage se guardan en `.appsec-ai-cache/` dentro del repositorio analizado, así que reescanear sin cambios no consume tokens.
 
+### Evaluación del triage
+
+`evals/triage/` tiene casos etiquetados a mano: problemas reales y código parecido pero seguro que el escáner marca igualmente. El script mide cuántos problemas reales descarta el triage (el error caro), cuántos falsos positivos elimina, si acierta la severidad y cuánto cuesta. Llama a la API de verdad:
+
+```bash
+python evals/triage/run_eval.py --repeat 3 --out resultados.json
+python evals/triage/run_eval.py --effort low     # comparar coste y calidad
+```
+
+Sale con código 1 si descarta algún problema real. Al añadir o cambiar reglas, `tests/test_eval.py` avisa si los casos y `labels.json` dejan de coincidir.
+
 ## Servicio SaaS
 
 ```bash
