@@ -29,6 +29,8 @@ class Installation(Base):
     active: Mapped[bool] = mapped_column(default=True)
     # El cliente acepta por escrito que su feedback (con fragmentos de código) mejore el triage.
     eval_opt_in: Mapped[bool] = mapped_column(default=False)
+    # Idioma de lo que se publica en GitHub y del triage ("es" | "en"); vacío = REPORT_LANGUAGE.
+    language: Mapped[str] = mapped_column(String(5), default="")
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     repositories: Mapped[list["Repository"]] = relationship(back_populates="installation", cascade="all, delete-orphan")

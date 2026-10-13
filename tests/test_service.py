@@ -384,6 +384,22 @@ def test_results_and_triage_cache_are_encrypted_at_rest(tmp_path, private_key, m
     assert cached and all(b"true_positive" not in p.read_bytes() for p in cached)
 
 
+def test_worker_publishes_in_the_installation_language(env, monkeypatch):
+    settings, db, client = env
+    install(client)
+    open_pr(client)
+    with db.session() as s, s.begin():
+        s.get(Installation, 7).language = "en"
+    fake = FakeGitHub(["app.py"])
+    worker, claude = fix_worker(settings, db, fake, monkeypatch)
+    worker.run_once()
+    done = [b for m, p, b in fake.calls if m == "PATCH" and "/check-runs/555" in p][-1]
+    assert "security finding" in done["output"]["title"] and done["actions"][0]["label"] == "Open fix PR"
+    comment = next(b for m, p, b in fake.calls if m == "POST" and p.endswith("/issues/5/comments"))
+    assert "Files changed" in comment["body"]
+    assert "Idioma de respuesta: en" in claude.calls[0]["messages"][0]["content"]  # el triage, también en inglés
+
+
 def test_check_rerun_requeues_scan(env, monkeypatch):
     settings, db, client = env
     install(client)

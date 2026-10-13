@@ -20,6 +20,7 @@ from sqlalchemy import select
 from appsec_ai.service.auth import SESSION_COOKIE, SESSION_TTL, STATE_COOKIE, Authenticator, Principal, encode_session, new_state
 from appsec_ai.service.config import Settings, get_settings
 from appsec_ai.service.crypto import Cipher, unseal
+from appsec_ai.i18n import localize
 from appsec_ai.models import ScanResult
 from appsec_ai.service import dashboard
 from appsec_ai.service.crypto import seal
@@ -59,6 +60,10 @@ class FeedbackIn(BaseModel):
 
 class InstallationSettingsIn(BaseModel):
     eval_opt_in: bool
+
+
+class PreferencesIn(BaseModel):
+    language: str = Field(pattern="^(es|en)$")
 
 
 class RateLimiter:
@@ -183,7 +188,8 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
                 q = q.where(Installation.id.in_(principal.installations))
             rows = s.scalars(q).all()
             return {"login": principal.login, "admin": principal.admin,
-                    "installations": [{"id": r.id, "account": r.account_login, "plan": r.plan} for r in rows]}
+                    "installations": [{"id": r.id, "account": r.account_login, "plan": r.plan,
+                                       "language": r.language or settings.language} for r in rows]}
 
     @app.get("/healthz")
     def healthz():
@@ -271,14 +277,18 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
             return [_scan_summary(r) for r in rows]
 
     @app.get("/api/scans/{scan_id}")
-    def get_scan(scan_id: int, principal: Principal = Depends(auth)):
+    def get_scan(scan_id: int, lang: str = "", principal: Principal = Depends(auth)):
         with db.session() as s:
             scan = visible_scan(s, principal, scan_id)
             votes = s.scalars(select(FindingFeedback).where(
                 FindingFeedback.repository_id == scan.repository_id,
                 FindingFeedback.user_login == principal.login)).all()
-            return {**_scan_summary(scan), "result": unseal(db.cipher, scan.result),
-                    "feedback": {v.fingerprint: v.useful for v in votes}}
+            result = unseal(db.cipher, scan.result)
+            if lang and result:
+                # Título y mensaje de cada hallazgo en el idioma del panel.
+                for f, model in zip(result.get("findings", []), ScanResult.model_validate(result).findings):
+                    f["title"], f["message"] = localize(model, lang)
+            return {**_scan_summary(scan), "result": result, "feedback": {v.fingerprint: v.useful for v in votes}}
 
     @app.get("/api/scans/{scan_id}/report.pdf")
     def scan_report_pdf(scan_id: int, lang: str = "es", principal: Principal = Depends(auth)):
@@ -339,6 +349,18 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
             row.finding = seal(db.cipher, finding.model_dump(mode="json"))
             row.created_at = utcnow()
         return {"fingerprint": data.fingerprint, "useful": data.useful}
+
+    @app.patch("/api/installations/{installation_id}/preferences")
+    def update_preferences(installation_id: int, data: PreferencesIn, principal: Principal = Depends(auth)):
+        """Idioma de los checks, comentarios y PR de correcciones de la organización."""
+        if not principal.can_see(installation_id):
+            raise HTTPException(status_code=404, detail="instalación no encontrada")
+        with db.session() as s, s.begin():
+            inst = s.get(Installation, installation_id)
+            if inst is None:
+                raise HTTPException(status_code=404, detail="instalación no encontrada")
+            inst.language = data.language
+            return {"id": inst.id, "language": inst.language}
 
     @app.patch("/api/installations/{installation_id}/settings", dependencies=[Depends(require_admin)])
     def update_installation_settings(installation_id: int, data: InstallationSettingsIn):

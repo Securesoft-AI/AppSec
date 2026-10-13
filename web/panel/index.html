@@ -98,6 +98,8 @@ tr.link { cursor: pointer; } tr.link:hover td { background: var(--accent-soft); 
   <div class="wrap">
     <span class="brand">Atalaya</span>
     <select id="inst" aria-label="Organización" hidden></select>
+    <label class="muted" id="gh-lang-wrap" hidden><span data-i18n="gh_lang">Idioma en GitHub</span>
+      <select id="gh-lang"><option value="es">Español</option><option value="en">English</option></select></label>
     <button class="btn" id="lang" type="button">EN</button>
     <button class="btn" id="logout" type="button" hidden data-i18n="logout">Salir</button>
   </div>
@@ -166,6 +168,7 @@ const I18N = {
     unscanned: "Sin escanear todavía: ", useful: "Útil", not_useful: "No útil", thanks: "Gracias, lo usaremos para mejorar.",
     verdict: "Veredicto IA", fix_requested: "Corrección en cola. Aparecerá un PR en el repositorio.",
     fix_error: "No se pudo pedir la corrección: ", full: "completo", pull_request: "PR", none: "—",
+    gh_lang: "Idioma en GitHub",
   },
   en: {
     logout: "Sign out", login_title: "Sign in with your GitHub account",
@@ -180,6 +183,7 @@ const I18N = {
     unscanned: "Not scanned yet: ", useful: "Useful", not_useful: "Not useful", thanks: "Thanks, we'll use it to improve.",
     verdict: "AI verdict", fix_requested: "Fix queued. A PR will appear in the repository.",
     fix_error: "Couldn't request the fix: ", full: "full", pull_request: "PR", none: "—",
+    gh_lang: "GitHub language",
   },
 };
 let lang = (() => { try { return localStorage.getItem("lang") || (navigator.language || "es").slice(0, 2); } catch { return "es"; } })();
@@ -213,7 +217,7 @@ function applyLang() {
 }
 
 function showLogin() {
-  for (const id of ["overview", "charts", "repos", "inventory", "detail", "logout", "inst"]) $(id).hidden = true;
+  for (const id of ["overview", "charts", "repos", "inventory", "detail", "logout", "inst", "gh-lang-wrap"]) $(id).hidden = true;
   $("login").hidden = false;
 }
 
@@ -237,6 +241,9 @@ async function boot() {
 
 async function loadDashboard() {
   const id = $("inst").value;
+  const inst = me.installations.find((i) => String(i.id) === id);
+  $("gh-lang").value = inst ? inst.language : "es";
+  $("gh-lang-wrap").hidden = false;
   try { localStorage.setItem("inst", id); } catch {}
   const d = await api(`/api/installations/${encodeURIComponent(id)}/dashboard`);
   current = d;
@@ -331,7 +338,7 @@ function renderTrend(points) {
 }
 
 async function openScan(repo) {
-  const scan = await api(`/api/scans/${repo.scan_id}`);
+  const scan = await api(`/api/scans/${repo.scan_id}?lang=${lang}`);
   for (const sct of ["overview", "charts", "repos", "inventory"]) $(sct).hidden = true;
   $("detail").hidden = false; $("detail-msg").hidden = true;
   $("detail-title").textContent = repo.full_name;
@@ -380,6 +387,12 @@ $("lang").addEventListener("click", () => {
   if (current && $("detail").hidden) loadDashboard();
 });
 $("inst").addEventListener("change", loadDashboard);
+$("gh-lang").addEventListener("change", async (e) => {
+  const id = $("inst").value;
+  await api(`/api/installations/${encodeURIComponent(id)}/preferences`, { method: "PATCH", body: JSON.stringify({ language: e.target.value }) });
+  const inst = me.installations.find((i) => String(i.id) === id);
+  if (inst) inst.language = e.target.value;
+});
 let resizeTimer;
 window.addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => { if (lastTrend && !$("charts").hidden) renderTrend(lastTrend); }, 150); });
 $("back").addEventListener("click", () => { $("detail").hidden = true; for (const s of ["overview", "charts", "repos", "inventory"]) $(s).hidden = false; $("inventory").hidden = !current.ai_inventory.length; });

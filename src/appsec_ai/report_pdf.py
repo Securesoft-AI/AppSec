@@ -19,6 +19,7 @@ from reportlab.lib.units import mm
 from reportlab.platypus import KeepTogether, Paragraph, Preformatted, SimpleDocTemplate, Spacer, Table, TableStyle
 
 from appsec_ai import compliance
+from appsec_ai.i18n import localize
 from appsec_ai.models import ScanResult, Severity
 
 INK = colors.HexColor("#12232a")
@@ -123,7 +124,8 @@ def to_pdf(result: ScanResult, lang: str = "es", target: str = "", commit: str =
         story.append(Paragraph(T["truncated"].format(n=MAX_FINDINGS, total=len(findings)), st["muted"]))
     for i, f in enumerate(findings[:MAX_FINDINGS], 1):
         sev = f.effective_severity.value
-        block = [Paragraph(f'{i}. <font color="{SEV_COLOR[sev]}"><b>[{T[sev].upper()}]</b></font> {_e(f.title)}', st["h3"]),
+        title, message = localize(f, lang)
+        block = [Paragraph(f'{i}. <font color="{SEV_COLOR[sev]}"><b>[{T[sev].upper()}]</b></font> {_e(title)}', st["h3"]),
                  Paragraph(f'<b>{T["location"]}:</b> <font face="Courier">{_e(f.file)}:{f.line}</font> · '
                            f'<font face="Courier">{_e(f.rule_id)}</font>', st["muted"])]
         if f.frameworks:
@@ -131,7 +133,7 @@ def to_pdf(result: ScanResult, lang: str = "es", target: str = "", commit: str =
         t = f.triage
         if t:
             block.append(Paragraph(f'<b>{T["verdict"]}:</b> {t.verdict.value} ({t.confidence:.0%})', st["muted"]))
-        block.append(Paragraph(_e(t.explanation if t else f.message), st["body"]))
+        block.append(Paragraph(_e(t.explanation if t else message), st["body"]))
         if t and t.exploit_scenario:
             block.append(Paragraph(f'<b>{T["attack"]}:</b> {_e(t.exploit_scenario)}', st["body"]))
         if t and t.fix:

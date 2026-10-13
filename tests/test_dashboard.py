@@ -103,3 +103,18 @@ def test_pdf_report_endpoint_respects_access(env):
     assert r.status_code == 200 and r.content.startswith(b"%PDF")
     assert r.headers["content-type"] == "application/pdf" and "acme-shop" in r.headers["content-disposition"]
     assert client.get("/api/scans/4/report.pdf").status_code == 404
+
+
+def test_panel_language_and_installation_preference(env):
+    client, db, _ = env
+    es = client.get("/api/scans/2?lang=es").json()["result"]["findings"]
+    en = client.get("/api/scans/2?lang=en").json()["result"]["findings"]
+    assert any(f["title"].startswith("Salida del LLM") for f in es)
+    assert any(f["title"].startswith("LLM output executed") for f in en)
+    r = client.patch("/api/installations/7/preferences", json={"language": "en"}, headers={"Origin": PUBLIC})
+    assert r.json() == {"id": 7, "language": "en"}
+    assert client.get("/api/me").json()["installations"][0]["language"] == "en"
+    assert client.patch("/api/installations/8/preferences", json={"language": "en"},
+                        headers={"Origin": PUBLIC}).status_code == 404
+    assert client.patch("/api/installations/7/preferences", json={"language": "fr"},
+                        headers={"Origin": PUBLIC}).status_code == 422

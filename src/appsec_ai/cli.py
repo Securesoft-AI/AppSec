@@ -71,7 +71,7 @@ def main(argv: list[str] | None = None) -> int:
     elif args.format == "sarif":
         text = json.dumps(report.to_sarif(result), indent=2, ensure_ascii=False)
     else:
-        text = report.to_markdown(result, include_suppressed=args.show_suppressed)
+        text = report.to_markdown(result, include_suppressed=args.show_suppressed, lang=args.lang)
 
     if text is None:
         pass
