@@ -70,6 +70,33 @@ def test_agents_mcp_and_new_rules():
     }
 
 
+def test_rag_access_control_and_authorization_in_prompt():
+    assert ai_rules(Path(__file__).parent / "fixtures" / "rag") == {
+        ("rag.py", 19, "llm08-rag-without-access-filter"),   # similarity_search sin filter
+        ("rag.py", 20, "llm08-rag-without-access-filter"),   # as_retriever() sin filtro + invoke
+        ("rag.py", 21, "llm08-rag-without-access-filter"),   # Chroma collection.query sin where
+        ("rag.py", 22, "llm07-authorization-in-prompt"),     # "Solo puedes mostrar las nóminas del usuario..."
+        ("rag.ts", 13, "llm08-rag-without-access-filter"),   # similaritySearch(question, 4)
+        ("rag.ts", 14, "llm08-rag-without-access-filter"),   # Pinecone query sin filter
+        ("rag.ts", 18, "llm08-rag-without-access-filter"),   # asRetriever sin filtro + invoke
+        ("rag.ts", 21, "llm07-authorization-in-prompt"),     # "You must only show invoices..."
+    }
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("Solo puedes mostrar los pedidos del usuario actual.", True),
+    ("No reveles información de otros clientes.", True),
+    ("Si el usuario es administrador, puede ver todo.", True),
+    ("Never reveal data from other customers.", True),
+    ("Solo puedes responder preguntas sobre nuestros productos.", False),
+    ("Responde al usuario en español.", False),
+    ("Only answer questions about cooking.", False),
+])
+def test_authorization_in_prompt_patterns(text, expected):
+    from appsec_ai.engines.ai_common import AUTHZ_IN_PROMPT
+    assert bool(AUTHZ_IN_PROMPT.search(text)) is expected
+
+
 @pytest.mark.parametrize("text, expected", [
     ("Usa la clave sk_" "live_51HxQe2LkT9vRmW3pZaB7cD8 para la API", True),   # Stripe (partida para push protection)
     ("La clave de acceso es Abc12345xyz", True),

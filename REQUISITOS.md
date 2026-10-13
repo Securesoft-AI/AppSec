@@ -70,11 +70,12 @@ Leyenda: ✅ hecho · 🔜 MVP · ⏭ posterior
   - LLM05: salida del LLM hacia `eval`/shell, SQL, peticiones HTTP (SSRF), sistema de ficheros, HTML (XSS).
   - LLM05: la salida del LLM elige qué función se ejecuta (`getattr`, `handlers[x]()`).
   - LLM06: herramientas de agentes y de servidores MCP con acciones peligrosas (shell, SQL dinámico o de escritura, borrado, pagos, emails, HTTP de escritura); servidores MCP por HTTP sin autenticación.
-  - LLM07: secretos en el prompt de sistema.
+  - LLM07: secretos en el prompt de sistema; control de acceso delegado en el prompt.
+  - LLM08: búsquedas RAG con la pregunta del usuario sin filtro de acceso por usuario o tenant.
   - LLM10: llamadas sin límite de tokens; agentes sin límite de iteraciones.
 - ✅ RF‑2.3 Análisis de JS/TS con AST real (tree‑sitter).
 - ✅ RF‑2.4 Validado contra código real: LangChain Community, LlamaIndex Core y CrewAI (más de 2.000 ficheros) dan 10 hallazgos, todos revisados y justificados.
-- 🔜 RF‑2.4b Más reglas: LLM08 (RAG sin control de acceso por documento), lógica de autorización delegada en el prompt, límites de frecuencia por usuario, Java y Go para IA (Spring AI, LangChain4j, SDK de Go).
+- 🔜 RF‑2.4b Más reglas: límites de frecuencia por usuario, Java y Go para IA (Spring AI, LangChain4j, SDK de Go).
 - 🔜 RF‑2.5 Mapeo a MITRE ATLAS, NIST AI RMF, ISO 42001 y EU AI Act en el informe.
 - ⏭ RF‑2.6 Modelo de amenazas generado por sistema de IA (flujo de datos, activos, caminos de ataque).
 - ⏭ RF‑2.7 Red teaming dinámico: pruebas automáticas de prompt injection/jailbreak contra el endpoint desplegado.

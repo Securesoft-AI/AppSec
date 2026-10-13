@@ -6,8 +6,9 @@ import ast
 import re
 
 from appsec_ai.engines.ai_common import (
-    DANGEROUS_CALL, DESTRUCTIVE_SQL, SECRET_IN_TEXT, SQL_EXEC_CALL, TOKEN_LIMIT_KEYS, FindingSink, FuncState,
-    is_llm_call_name, needs_token_limit,
+    ACCESS_FILTER_KEYS, AUTHZ_IN_PROMPT, DANGEROUS_CALL, DESTRUCTIVE_SQL, RETRIEVAL_CALL, RETRIEVER_INVOKE,
+    SECRET_IN_TEXT, SQL_EXEC_CALL, TOKEN_LIMIT_KEYS, VECTOR_QUERY_KEYS, FindingSink, FuncState, is_llm_call_name,
+    needs_token_limit,
 )
 
 SDKS = {
@@ -127,6 +128,7 @@ class PythonAIAnalyzer(ast.NodeVisitor):
         self.state = FuncState()
         self.constants: dict[str, ast.AST] = {}       # constantes de módulo (posibles prompts)
         self.mcp_servers: dict[str, bool] = {}        # variable -> tiene autenticación
+        self.unfiltered_retrievers: set[str] = set()  # variables con as_retriever() sin filtro
 
     @property
     def findings(self):
@@ -254,6 +256,12 @@ class PythonAIAnalyzer(ast.NodeVisitor):
             for name in names:
                 self.mcp_servers[name] = any(kw.arg == "auth" for kw in value.keywords)
                 self.out.component("mcp_server", name, value.lineno, "FastMCP")
+        if isinstance(value, ast.Call) and dotted(value.func).endswith(".as_retriever"):
+            for name in names:
+                if has_access_filter(value):
+                    self.unfiltered_retrievers.discard(name)
+                else:
+                    self.unfiltered_retrievers.add(name)
         taint = self.taint_of(value)
         from_llm = self.depends_on_llm(value)
         for name in names:
@@ -276,6 +284,7 @@ class PythonAIAnalyzer(ast.NodeVisitor):
         else:
             self._check_sink(node, name)
             self._check_agent_config(node, name)
+            self._check_retrieval(node, name)
         self.generic_visit(node)
 
     def _check_llm_call(self, call: ast.Call, name: str):
@@ -298,8 +307,11 @@ class PythonAIAnalyzer(ast.NodeVisitor):
         for arg in system_args:
             if self.taint_of(arg):
                 self.add("llm01-untrusted-input-in-system-prompt", call)
-            if SECRET_IN_TEXT.search(self.resolve_text(arg)):
+            prompt_text = self.resolve_text(arg)
+            if SECRET_IN_TEXT.search(prompt_text):
                 self.add("llm07-secret-in-system-prompt", call)
+            if AUTHZ_IN_PROMPT.search(prompt_text):
+                self.add("llm07-authorization-in-prompt", call)
 
         for arg in list(call.args) + [kw.value for kw in call.keywords if kw.arg not in ("model",)]:
             taint = self.taint_of(arg)
@@ -340,6 +352,20 @@ class PythonAIAnalyzer(ast.NodeVisitor):
             if any(self.depends_on_llm(a) for a in args):
                 self.add("llm02-llm-io-logged", call)
 
+    def _check_retrieval(self, call: ast.Call, name: str):
+        """LLM08: búsqueda en un vector store con la pregunta del usuario y sin filtro de acceso."""
+        obj = name.rsplit(".", 1)[0]
+        kwargs = {kw.arg for kw in call.keywords}
+        is_search = RETRIEVAL_CALL.search(name) or (
+            name.endswith(".query") and kwargs & VECTOR_QUERY_KEYS)  # Chroma / Pinecone
+        is_retriever = RETRIEVER_INVOKE.search(name) and obj in self.unfiltered_retrievers
+        if not (is_search or is_retriever) or (is_search and has_access_filter(call)):
+            return
+        query = call.args[:1] + [kw.value for kw in call.keywords if kw.arg in (
+            "query", "input", "query_texts", "query_embeddings", "vector")]
+        if any(self.taint_of(a) == "user" for a in query):
+            self.add("llm08-rag-without-access-filter", call)
+
     def _check_agent_config(self, call: ast.Call, name: str):
         last = name.split(".")[-1]
         if last in ("AgentExecutor", "initialize_agent", "create_react_agent", "AgentExecutor.from_agent_and_tools"):
@@ -363,6 +389,19 @@ class PythonAIAnalyzer(ast.NodeVisitor):
             if re.search(r"<[a-zA-Z]", string_parts(node.value)):
                 self.add("llm05-llm-output-to-html", node)
         self.generic_visit(node)
+
+
+def has_access_filter(call: ast.Call) -> bool:
+    """¿La llamada restringe los documentos? (filter=..., where=..., search_kwargs={"filter": ...})."""
+    for kw in call.keywords:
+        if kw.arg in ACCESS_FILTER_KEYS:
+            return True
+        if kw.arg == "search_kwargs" and isinstance(kw.value, ast.Dict):
+            if any(isinstance(k, ast.Constant) and k.value in ACCESS_FILTER_KEYS for k in kw.value.keys):
+                return True
+        if kw.arg is None:  # **kwargs: no se puede saber
+            return True
+    return False
 
 
 def analyze_python(rel: str, source: str):

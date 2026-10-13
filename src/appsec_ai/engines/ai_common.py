@@ -13,6 +13,7 @@ OWASP = {
     "LLM05": "OWASP-LLM05:2025 Improper Output Handling",
     "LLM06": "OWASP-LLM06:2025 Excessive Agency",
     "LLM07": "OWASP-LLM07:2025 System Prompt Leakage",
+    "LLM08": "OWASP-LLM08:2025 Vector and Embedding Weaknesses",
     "LLM10": "OWASP-LLM10:2025 Unbounded Consumption",
 }
 
@@ -88,6 +89,18 @@ RULES = {r.id: r for r in [
          "Secreto incluido en el prompt de sistema",
          "El prompt de sistema contiene lo que parece una credencial. Los prompts de sistema se pueden "
          "extraer con prompt injection: nunca incluyas secretos en ellos.", "CWE-200"),
+    Rule("llm07-authorization-in-prompt", "LLM07", Severity.MEDIUM,
+         "Control de acceso delegado en el prompt",
+         "El prompt de sistema le pide al modelo que decida qué datos puede ver cada usuario. Con prompt "
+         "injection esa instrucción se salta: el modelo no es un control de seguridad. Aplica la autorización "
+         "en el código, antes de que los datos lleguen al modelo, y dale solo lo que el usuario puede ver.",
+         "CWE-863"),
+    Rule("llm08-rag-without-access-filter", "LLM08", Severity.MEDIUM,
+         "Búsqueda RAG con la pregunta del usuario sin filtro de acceso",
+         "La búsqueda en el vector store usa la entrada del usuario y no filtra por usuario, tenant ni "
+         "permisos. Si el índice guarda documentos con distintos permisos, cualquiera puede recuperar "
+         "documentos ajenos preguntando por ellos. Filtra en la propia consulta (metadatos, namespace o "
+         "colección por tenant), nunca en el prompt.", "CWE-863"),
     Rule("llm10-no-output-limit", "LLM10", Severity.LOW,
          "Llamada al LLM sin límite de tokens de salida",
          "Sin un límite explícito de tokens, un atacante puede provocar respuestas largas y costes elevados. "
@@ -105,6 +118,32 @@ SECRET_IN_TEXT = re.compile(
     r"|\bsk-[A-Za-z0-9_\-]{16,}|\b[sr]k_(?:live|test)_[A-Za-z0-9]{16,}|\bAKIA[0-9A-Z]{16}\b"
     r"|\bgh[pousr]_[A-Za-z0-9]{30,}"
 )
+
+# Autorización delegada en el prompt de sistema (LLM07): "solo puedes mostrar los datos del usuario".
+AUTHZ_IN_PROMPT = re.compile(
+    r"(?i)\b(?:solo|sólo|únicamente)\s+(?:puedes|debes|podrás)\s+(?:\w+\s+){0,3}?"
+    r"(?:mostrar|ver|devolver|consultar|acceder|revelar|dar|modificar|borrar)\b[^.\n]{0,80}?"
+    r"\b(?:usuario|cliente|tenant|empresa|cuenta|empleado)"
+    r"|\bno\s+(?:reveles|muestres|devuelvas|compartas|des|accedas)\b[^.\n]{0,80}?"
+    r"\b(?:otros|otras|demás)\s+(?:usuarios|clientes|empleados|cuentas|empresas|tenants)"
+    r"|\bsi\s+el\s+usuario\s+(?:no\s+)?es\s+(?:un\s+)?(?:admin|administrador)"
+    r"|\b(?:can|may|must|should)\s+only\s+(?:show|return|reveal|access|display|share|modify|delete)\b"
+    r"[^.\n]{0,80}?\b(?:user|customer|tenant|account|employee)"
+    r"|\bonly\s+(?:show|return|reveal|display|share)\b[^.\n]{0,80}?\b(?:user|customer|tenant|account)"
+    r"|\b(?:never|do\s+not|don't)\s+(?:reveal|show|return|share|disclose|access)\b[^.\n]{0,80}?"
+    r"\bother\s+(?:users|customers|accounts|tenants|employees)"
+    r"|\bif\s+the\s+user\s+is\s+(?:not\s+)?(?:an?\s+)?(?:admin|administrator)"
+)
+
+# Búsquedas en vector stores (LLM08) y argumentos que restringen qué documentos se recuperan.
+RETRIEVAL_CALL = re.compile(
+    r"\.(similarity_search\w*|max_marginal_relevance_search\w*|a?get_relevant_documents"
+    r"|similaritySearch\w*|maxMarginalRelevanceSearch|getRelevantDocuments)$"
+)
+RETRIEVER_INVOKE = re.compile(r"\.(invoke|ainvoke|a?get_relevant_documents|getRelevantDocuments)$")
+VECTOR_QUERY_KEYS = {"query_texts", "query_embeddings", "vector", "top_k", "queryTexts", "queryEmbeddings", "topK"}
+ACCESS_FILTER_KEYS = {"filter", "filters", "where", "where_document", "namespace", "query_filter", "expr",
+                      "pre_filter", "tenant", "whereDocument", "queryFilter", "preFilter"}
 
 # Operaciones peligrosas dentro de herramientas de agentes (LLM06), por nombre de llamada.
 DANGEROUS_CALL = re.compile(

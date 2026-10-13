@@ -37,6 +37,8 @@ Python se analiza sobre el AST y JS/TS sobre el árbol de [tree-sitter], con flu
 | `llm06-excessive-agency-tool` | LLM06 | Herramientas de agentes o MCP con shell, borrado, SQL dinámico o de escritura, pagos, emails |
 | `llm06-mcp-http-without-auth` | LLM06 | Servidor MCP publicado por HTTP/SSE sin autenticación |
 | `llm07-secret-in-system-prompt` | LLM07 | Credenciales dentro del prompt de sistema |
+| `llm07-authorization-in-prompt` | LLM07 | Control de acceso delegado en el prompt ("solo puedes mostrar los datos del usuario") |
+| `llm08-rag-without-access-filter` | LLM08 | Búsqueda en un vector store con la pregunta del usuario y sin filtro por usuario o tenant (LangChain, Chroma, Pinecone) |
 | `llm10-no-output-limit` | LLM10 | Llamadas OpenAI-compatibles o Vercel AI sin límite de tokens |
 | `llm10-unbounded-agent-loop` | LLM10 | Agentes con `max_iterations=None` |
 

@@ -12,8 +12,9 @@ from functools import lru_cache
 from tree_sitter import Language, Node, Parser
 
 from appsec_ai.engines.ai_common import (
-    DANGEROUS_CALL, DESTRUCTIVE_SQL, SECRET_IN_TEXT, SQL_EXEC_CALL, TOKEN_LIMIT_KEYS, FindingSink, FuncState,
-    is_llm_call_name, needs_token_limit,
+    ACCESS_FILTER_KEYS, AUTHZ_IN_PROMPT, DANGEROUS_CALL, DESTRUCTIVE_SQL, RETRIEVAL_CALL, RETRIEVER_INVOKE,
+    SECRET_IN_TEXT, SQL_EXEC_CALL, TOKEN_LIMIT_KEYS, VECTOR_QUERY_KEYS, FindingSink, FuncState, is_llm_call_name,
+    needs_token_limit,
 )
 
 SDKS = {
@@ -148,6 +149,7 @@ class JSAIAnalyzer:
         self.out = FindingSink("ai-security", rel, source.decode("utf-8", errors="replace").splitlines())
         self.tree = parser.parse(source)
         self.constants: dict[str, Node] = {}
+        self.unfiltered_retrievers: set[str] = set()  # variables con asRetriever() sin filtro
 
     def line(self, node: Node) -> int:
         return node.start_point[0] + 1
@@ -236,6 +238,13 @@ class JSAIAnalyzer:
         if value.type in ("string", "template_string") or (value.type == "binary_expression" and has_interpolation(value)):
             for n in names:
                 self.constants[n] = value
+        call = value.named_children[0] if value.type == "await_expression" and value.named_children else value
+        if call.type == "call_expression" and call_name(call).endswith(".asRetriever"):
+            args = call.child_by_field_name("arguments")
+            filtered = any(set(pairs_of(a)) & ACCESS_FILTER_KEYS for a in (args.named_children if args else [])
+                           if a.type == "object")
+            for n in names:
+                (self.unfiltered_retrievers.discard if filtered else self.unfiltered_retrievers.add)(n)
         taint = self.taint_of(value, state)
         from_llm = self.depends_on_llm(value, state)
         for n in names:
@@ -265,6 +274,7 @@ class JSAIAnalyzer:
             self._check_llm_call(node, name, arg_nodes, state)
             return
 
+        self._check_retrieval(node, name, arg_nodes, state)
         fn = node.child_by_field_name("function")
         if fn is not None and fn.type == "subscript_expression":
             if self.depends_on_llm(fn.child_by_field_name("index"), state):
@@ -290,6 +300,25 @@ class JSAIAnalyzer:
         elif HTML_SINK.match(name):
             if any(self.depends_on_llm(a, state) and re.search(r"<[a-zA-Z]", string_value(a)) for a in arg_nodes):
                 self.add("llm05-llm-output-to-html", node)
+
+    def _check_retrieval(self, node: Node, name: str, arg_nodes: list[Node], state: FuncState):
+        """LLM08: búsqueda en un vector store con la pregunta del usuario y sin filtro de acceso."""
+        objects = [a for a in arg_nodes if a.type == "object"]
+        keys = {k for o in objects for k in pairs_of(o)}
+        if RETRIEVAL_CALL.search(name):
+            # LangChain JS: similaritySearch(query, k, filter).
+            filtered = len(arg_nodes) >= 3 or bool(keys & ACCESS_FILTER_KEYS)
+            query = arg_nodes[:1]
+        elif name.endswith(".query") and keys & VECTOR_QUERY_KEYS:  # Pinecone / Chroma
+            filtered = bool(keys & ACCESS_FILTER_KEYS) or ".namespace(" in name
+            query = [v for o in objects for k, v in pairs_of(o).items()
+                     if k in ("vector", "queryTexts", "queryEmbeddings") and v is not None]
+        elif RETRIEVER_INVOKE.search(name) and name.rsplit(".", 1)[0] in self.unfiltered_retrievers:
+            filtered, query = False, arg_nodes[:1]
+        else:
+            return
+        if not filtered and any(self.taint_of(a, state) == "user" for a in query):
+            self.add("llm08-rag-without-access-filter", node)
 
     def _check_llm_call(self, node: Node, name: str, arg_nodes: list[Node], state: FuncState):
         objects = [n for a in arg_nodes for n in walk(a) if n.type == "object"]
@@ -324,6 +353,8 @@ class JSAIAnalyzer:
             literal = self.constants.get(text(v), v) if v.type == "identifier" else v
             if SECRET_IN_TEXT.search(string_value(literal)):
                 self.add("llm07-secret-in-system-prompt", node)
+            if AUTHZ_IN_PROMPT.search(string_value(literal)):
+                self.add("llm07-authorization-in-prompt", node)
         for v in prompt_values:
             taint = self.taint_of(v, state)
             if taint == "external":
