@@ -100,7 +100,7 @@ Leyenda: ✅ hecho · 🔜 MVP · ⏭ posterior
 - 🟡 RF‑4.4 Multi‑tenant: datos separados por instalación; clonado seguro (sin hooks, LFS ni enlaces simbólicos, token fuera de los argumentos), workdir temporal que siempre se borra, worker sin privilegios. Falta aislar cada escaneo en su propio contenedor efímero (gVisor/Firecracker).
 - 🔜 RF‑4.5 Facturación con Stripe (planes, límites de uso, prueba gratuita de 14 días).
 - 🔜 RF‑4.6 Interfaz y correos en inglés y español.
-- 🔜 RF‑4.7 Informe PDF descargable para cuestionarios de seguridad de clientes.
+- ✅ RF‑4.7 Informe PDF descargable en español o inglés (panel, `GET /api/scans/{id}/report.pdf` y `appsec-ai scan --format pdf`), con metodología, mapeo a marcos de IA, inventario y detalle de hallazgos.
 - ⏭ RF‑4.8 GitLab y Bitbucket, Slack, Jira, SSO (SAML/OIDC), registros de auditoría.
 
 ## 5. Requisitos no funcionales

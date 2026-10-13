@@ -13,7 +13,7 @@ from collections import defaultdict, deque
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
@@ -279,6 +279,21 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
                 FindingFeedback.user_login == principal.login)).all()
             return {**_scan_summary(scan), "result": unseal(db.cipher, scan.result),
                     "feedback": {v.fingerprint: v.useful for v in votes}}
+
+    @app.get("/api/scans/{scan_id}/report.pdf")
+    def scan_report_pdf(scan_id: int, lang: str = "es", principal: Principal = Depends(auth)):
+        from appsec_ai.report_pdf import to_pdf
+
+        with db.session() as s:
+            scan = visible_scan(s, principal, scan_id)
+            if not scan.result:
+                raise HTTPException(status_code=409, detail="el escaneo aún no tiene resultado")
+            repo = s.get(Repository, scan.repository_id)
+            result = ScanResult.model_validate(unseal(db.cipher, scan.result))
+            pdf = to_pdf(result, lang=lang, target=repo.full_name, commit=scan.head_sha, generated=scan.finished_at)
+        filename = f"atalaya-{repo.full_name.replace('/', '-')}-{scan.head_sha[:7]}.pdf"
+        return Response(pdf, media_type="application/pdf",
+                        headers={"Content-Disposition": f'attachment; filename="{filename}"', "Cache-Control": "no-store"})
 
     # -- panel por organización (RF-4.3) ------------------------------------------------------
 

@@ -95,3 +95,11 @@ def test_panel_page_is_served_and_never_renders_data_as_html(env):
     assert r.status_code == 200 and "Atalaya" in r.text
     assert "innerHTML" not in r.text and "insertAdjacentHTML" not in r.text
     assert "frame-ancestors 'none'" in r.headers["content-security-policy"]
+
+
+def test_pdf_report_endpoint_respects_access(env):
+    client, _, _ = env
+    r = client.get("/api/scans/2/report.pdf?lang=en")
+    assert r.status_code == 200 and r.content.startswith(b"%PDF")
+    assert r.headers["content-type"] == "application/pdf" and "acme-shop" in r.headers["content-disposition"]
+    assert client.get("/api/scans/4/report.pdf").status_code == 404
