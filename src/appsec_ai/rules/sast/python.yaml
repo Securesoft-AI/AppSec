@@ -1,0 +1,363 @@
+# Reglas SAST propias para Python. Licencia: propietaria (appsec-ai).
+# Fuentes de entrada no confiable comunes: Flask, Django, FastAPI/Starlette.
+rules:
+  - id: python-sql-injection
+    languages: [python]
+    severity: ERROR
+    message: >-
+      Consulta SQL construida con datos de la petición. Un atacante puede leer, modificar o borrar
+      datos. Usa consultas parametrizadas (cursor.execute("... WHERE id = %s", (valor,))).
+    metadata:
+      title: Inyección SQL
+      severity: high
+      cwe: ["CWE-89: SQL Injection"]
+      owasp: ["A03:2021 Injection"]
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          - pattern: flask.request.$ATTR
+          - pattern: flask.request.$ATTR.get(...)
+          - pattern: flask.request.$ATTR[...]
+          - pattern: flask.request.get_json(...)
+          - pattern: request.GET.get(...)
+          - pattern: request.POST.get(...)
+          - pattern: request.GET[...]
+          - pattern: request.POST[...]
+          - pattern: request.query_params.get(...)
+          - pattern: request.path_params[...]
+          - pattern: input(...)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: $CUR.execute($Q, ...)
+              - pattern: $CUR.executemany($Q, ...)
+              - pattern: $CUR.executescript($Q)
+              - pattern: $DB.raw($Q, ...)
+              - pattern: sqlalchemy.text($Q)
+              - pattern: text($Q)
+          - focus-metavariable: $Q
+    pattern-sanitizers:
+      - pattern: int(...)
+      - pattern: float(...)
+
+  - id: python-sql-formatted-query
+    languages: [python]
+    severity: WARNING
+    message: >-
+      Consulta SQL construida con formato de cadenas (f-string, +, % o .format). Aunque hoy los
+      datos sean de confianza, es un patrón frágil: usa parámetros.
+    metadata:
+      title: Consulta SQL construida con cadenas
+      severity: medium
+      cwe: ["CWE-89: SQL Injection"]
+    patterns:
+      - pattern-either:
+          - pattern: $CUR.execute(f"...", ...)
+          - pattern: $CUR.execute("..." + $X, ...)
+          - pattern: $CUR.execute("..." % $X, ...)
+          - pattern: $CUR.execute("...".format(...), ...)
+          - patterns:
+              - pattern: |
+                  $Q = f"..."
+                  ...
+                  $CUR.execute($Q, ...)
+      - metavariable-regex:
+          metavariable: $CUR
+          regex: (?i).*(cur|conn|db|session|engine|connection|cnx).*
+
+  - id: python-command-injection
+    languages: [python]
+    severity: ERROR
+    message: >-
+      Comando del sistema construido con datos de la petición: ejecución remota de comandos.
+      Usa subprocess con una lista de argumentos, sin shell=True, y valida la entrada con una lista blanca.
+    metadata:
+      title: Inyección de comandos
+      severity: critical
+      cwe: ["CWE-78: OS Command Injection"]
+      owasp: ["A03:2021 Injection"]
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          - pattern: flask.request.$ATTR
+          - pattern: flask.request.$ATTR.get(...)
+          - pattern: flask.request.$ATTR[...]
+          - pattern: flask.request.get_json(...)
+          - pattern: request.GET.get(...)
+          - pattern: request.POST.get(...)
+          - pattern: request.GET[...]
+          - pattern: request.POST[...]
+          - pattern: request.query_params.get(...)
+          - pattern: request.path_params[...]
+          - pattern: input(...)
+    pattern-sinks:
+      - pattern-either:
+          - pattern: os.system(...)
+          - pattern: os.popen(...)
+          - pattern: subprocess.$F(..., shell=True, ...)
+          - pattern: commands.getoutput(...)
+    pattern-sanitizers:
+      - pattern: shlex.quote(...)
+
+  - id: python-subprocess-shell-true
+    languages: [python]
+    severity: WARNING
+    message: >-
+      subprocess con shell=True y un comando no literal. Si alguna parte del comando llega a ser
+      controlable por un usuario, habrá inyección de comandos.
+    metadata:
+      title: subprocess con shell=True
+      severity: medium
+      cwe: ["CWE-78: OS Command Injection"]
+    patterns:
+      - pattern: subprocess.$F($CMD, ..., shell=True, ...)
+      - pattern-not: subprocess.$F("...", ..., shell=True, ...)
+
+  - id: python-code-injection
+    languages: [python]
+    severity: ERROR
+    message: Datos de la petición evaluados como código Python (eval/exec). Ejecución remota de código.
+    metadata:
+      title: Inyección de código
+      severity: critical
+      cwe: ["CWE-95: Eval Injection"]
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          - pattern: flask.request.$ATTR
+          - pattern: flask.request.$ATTR.get(...)
+          - pattern: flask.request.$ATTR[...]
+          - pattern: flask.request.get_json(...)
+          - pattern: request.GET.get(...)
+          - pattern: request.POST.get(...)
+          - pattern: request.GET[...]
+          - pattern: request.POST[...]
+          - pattern: request.query_params.get(...)
+          - pattern: request.path_params[...]
+          - pattern: input(...)
+    pattern-sinks:
+      - pattern-either:
+          - pattern: eval(...)
+          - pattern: exec(...)
+          - pattern: compile(...)
+
+  - id: python-ssrf
+    languages: [python]
+    severity: ERROR
+    message: >-
+      El servidor hace peticiones a una URL controlada por el usuario (SSRF): puede alcanzar
+      servicios internos o metadatos de la nube. Valida el destino con una lista blanca de dominios.
+    metadata:
+      title: Server-Side Request Forgery
+      severity: high
+      cwe: ["CWE-918: Server-Side Request Forgery"]
+      owasp: ["A10:2021 SSRF"]
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          - pattern: flask.request.$ATTR
+          - pattern: flask.request.$ATTR.get(...)
+          - pattern: flask.request.$ATTR[...]
+          - pattern: flask.request.get_json(...)
+          - pattern: request.GET.get(...)
+          - pattern: request.POST.get(...)
+          - pattern: request.GET[...]
+          - pattern: request.POST[...]
+          - pattern: request.query_params.get(...)
+          - pattern: request.path_params[...]
+          - pattern: input(...)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: requests.$M($URL, ...)
+              - pattern: httpx.$M($URL, ...)
+              - pattern: urllib.request.urlopen($URL, ...)
+              - pattern: urlopen($URL, ...)
+          - focus-metavariable: $URL
+
+  - id: python-path-traversal
+    languages: [python]
+    severity: ERROR
+    message: >-
+      Ruta de fichero construida con datos de la petición: un atacante puede leer o escribir ficheros
+      fuera del directorio previsto (../). Usa werkzeug.utils.secure_filename o comprueba la ruta resuelta.
+    metadata:
+      title: Path traversal
+      severity: high
+      cwe: ["CWE-22: Path Traversal"]
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          - pattern: flask.request.$ATTR
+          - pattern: flask.request.$ATTR.get(...)
+          - pattern: flask.request.$ATTR[...]
+          - pattern: flask.request.get_json(...)
+          - pattern: request.GET.get(...)
+          - pattern: request.POST.get(...)
+          - pattern: request.GET[...]
+          - pattern: request.POST[...]
+          - pattern: request.query_params.get(...)
+          - pattern: request.path_params[...]
+          - pattern: input(...)
+    pattern-sinks:
+      - pattern-either:
+          - pattern: open(...)
+          - pattern: flask.send_file(...)
+          - pattern: send_file(...)
+          - pattern: os.remove(...)
+          - pattern: shutil.rmtree(...)
+          - pattern: pathlib.Path(...)
+    pattern-sanitizers:
+      - pattern: secure_filename(...)
+      - pattern: werkzeug.utils.secure_filename(...)
+      - pattern: os.path.basename(...)
+      - pattern: flask.send_from_directory(...)
+
+  - id: python-ssti
+    languages: [python]
+    severity: ERROR
+    message: >-
+      Plantilla Jinja2 construida a partir de datos no literales (Server-Side Template Injection):
+      permite ejecutar código. Usa render_template con un fichero y pasa los datos como variables.
+    metadata:
+      title: Server-Side Template Injection
+      severity: critical
+      cwe: ["CWE-1336: Template Injection"]
+    patterns:
+      - pattern-either:
+          - pattern: flask.render_template_string($T, ...)
+          - pattern: render_template_string($T, ...)
+          - pattern: jinja2.Template($T, ...)
+          - pattern: Template($T, ...)
+      - pattern-not: flask.render_template_string("...", ...)
+      - pattern-not: render_template_string("...", ...)
+      - pattern-not: jinja2.Template("...", ...)
+      - pattern-not: Template("...", ...)
+
+  - id: python-reflected-xss
+    languages: [python]
+    severity: WARNING
+    message: >-
+      Datos de la petición devueltos dentro de HTML sin escapar (XSS reflejado). Usa plantillas con
+      autoescapado o markupsafe.escape().
+    metadata:
+      title: Cross-Site Scripting reflejado
+      severity: medium
+      cwe: ["CWE-79: Cross-site Scripting"]
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          - pattern: flask.request.$ATTR
+          - pattern: flask.request.$ATTR.get(...)
+          - pattern: flask.request.$ATTR[...]
+          - pattern: flask.request.get_json(...)
+          - pattern: request.GET.get(...)
+          - pattern: request.POST.get(...)
+          - pattern: request.GET[...]
+          - pattern: request.POST[...]
+          - pattern: request.query_params.get(...)
+          - pattern: request.path_params[...]
+          - pattern: input(...)
+    pattern-sinks:
+      - patterns:
+          - pattern-inside: |
+              @$APP.route(...)
+              def $F(...):
+                ...
+          - pattern-either:
+              - patterns:
+                  - pattern: return $RET
+                  - metavariable-regex:
+                      metavariable: $RET
+                      regex: (?s).*<[a-zA-Z].*
+                  - focus-metavariable: $RET
+              - pattern: flask.make_response(...)
+              - pattern: django.http.HttpResponse(...)
+              - pattern: HttpResponse(...)
+    pattern-sanitizers:
+      - pattern: escape(...)
+      - pattern: markupsafe.escape(...)
+      - pattern: html.escape(...)
+
+  - id: python-insecure-deserialization
+    languages: [python]
+    severity: ERROR
+    message: >-
+      Deserialización insegura: pickle/marshal/yaml.load pueden ejecutar código al cargar datos no
+      confiables. Usa JSON o yaml.safe_load.
+    metadata:
+      title: Deserialización insegura
+      severity: high
+      cwe: ["CWE-502: Deserialization of Untrusted Data"]
+    pattern-either:
+      - pattern: pickle.loads(...)
+      - pattern: pickle.load(...)
+      - pattern: cPickle.loads(...)
+      - pattern: dill.loads(...)
+      - pattern: marshal.loads(...)
+      - pattern: shelve.open(...)
+      - patterns:
+          - pattern: yaml.load(...)
+          - pattern-not: yaml.load(..., Loader=yaml.SafeLoader, ...)
+          - pattern-not: yaml.load(..., Loader=SafeLoader, ...)
+          - pattern-not: yaml.load(..., Loader=yaml.CSafeLoader, ...)
+      - pattern: yaml.unsafe_load(...)
+
+  - id: python-tls-verification-disabled
+    languages: [python]
+    severity: WARNING
+    message: Verificación de certificados TLS desactivada (verify=False). Permite ataques man-in-the-middle.
+    metadata:
+      title: Verificación TLS desactivada
+      severity: medium
+      cwe: ["CWE-295: Improper Certificate Validation"]
+    pattern-either:
+      - pattern: requests.$M(..., verify=False, ...)
+      - pattern: httpx.$M(..., verify=False, ...)
+      - pattern: httpx.Client(..., verify=False, ...)
+      - pattern: ssl._create_unverified_context(...)
+
+  - id: python-jwt-signature-not-verified
+    languages: [python]
+    severity: ERROR
+    message: "El token JWT se decodifica sin verificar la firma: cualquiera puede falsificar identidades."
+    metadata:
+      title: JWT sin verificar firma
+      severity: high
+      cwe: ["CWE-347: Improper Verification of Cryptographic Signature"]
+    pattern-either:
+      - pattern: 'jwt.decode(..., options={..., "verify_signature": False, ...}, ...)'
+      - pattern: jwt.decode(..., verify=False, ...)
+      - pattern: 'jwt.decode(..., algorithms=[..., "none", ...], ...)'
+
+  - id: python-flask-debug-enabled
+    languages: [python]
+    severity: WARNING
+    message: Flask en modo debug expone una consola que permite ejecutar código si se publica.
+    metadata:
+      title: Modo debug activado
+      severity: medium
+      cwe: ["CWE-489: Active Debug Code"]
+    pattern-either:
+      - pattern: $APP.run(..., debug=True, ...)
+
+  - id: python-weak-password-hash
+    languages: [python]
+    severity: WARNING
+    message: >-
+      Contraseña procesada con un hash rápido (MD5/SHA*). Usa un algoritmo específico para contraseñas
+      (argon2, bcrypt, scrypt).
+    metadata:
+      title: Hash de contraseña débil
+      severity: medium
+      cwe: ["CWE-916: Use of Password Hash With Insufficient Computational Effort"]
+    patterns:
+      - pattern-either:
+          - pattern: hashlib.$H($PWD, ...)
+          - pattern: hashlib.$H($PWD.encode(...), ...)
+      - metavariable-regex:
+          metavariable: $H
+          regex: ^(md5|sha1|sha224|sha256|sha512)$
+      - metavariable-regex:
+          metavariable: $PWD
+          regex: (?i).*(passw|pwd|contrase).*

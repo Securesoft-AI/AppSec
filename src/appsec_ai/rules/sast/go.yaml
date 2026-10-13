@@ -1,0 +1,122 @@
+# Reglas SAST propias para Go (net/http, Gin, Echo).
+rules:
+  - id: go-sql-injection
+    languages: [go]
+    severity: ERROR
+    message: >-
+      Consulta SQL construida con fmt.Sprintf o concatenación. Usa parámetros (db.Query("... WHERE id = $1", id)).
+    metadata:
+      title: Inyección SQL
+      severity: high
+      cwe: ["CWE-89: SQL Injection"]
+    patterns:
+      - pattern-either:
+          - pattern: $DB.$M(fmt.Sprintf($FMT, ...), ...)
+          - pattern: $DB.$M("..." + $X, ...)
+          - pattern: |
+              $Q := fmt.Sprintf($FMT, ...)
+              ...
+              $DB.$M($Q, ...)
+          - pattern: |
+              $Q := "..." + $X
+              ...
+              $DB.$M($Q, ...)
+      - metavariable-regex:
+          metavariable: $M
+          regex: ^(Query|QueryRow|QueryContext|QueryRowContext|Exec|ExecContext|Raw|Select|Get)$
+
+  - id: go-command-injection
+    languages: [go]
+    severity: ERROR
+    message: Comando del sistema construido con datos de la petición. Ejecución remota de comandos.
+    metadata:
+      title: Inyección de comandos
+      severity: critical
+      cwe: ["CWE-78: OS Command Injection"]
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          - pattern: '($R : *http.Request).URL.Query().Get(...)'
+          - pattern: '($R : *http.Request).FormValue(...)'
+          - pattern: '($R : *http.Request).PostFormValue(...)'
+          - pattern: '($C : *gin.Context).Query(...)'
+          - pattern: '($C : *gin.Context).Param(...)'
+          - pattern: '($C : *gin.Context).PostForm(...)'
+    pattern-sinks:
+      - pattern-either:
+          - pattern: exec.Command(...)
+          - pattern: exec.CommandContext(...)
+          - pattern: syscall.Exec(...)
+
+  - id: go-ssrf
+    languages: [go]
+    severity: ERROR
+    message: El servidor hace peticiones a una URL controlada por el usuario (SSRF).
+    metadata:
+      title: Server-Side Request Forgery
+      severity: high
+      cwe: ["CWE-918: Server-Side Request Forgery"]
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          - pattern: '($R : *http.Request).URL.Query().Get(...)'
+          - pattern: '($R : *http.Request).FormValue(...)'
+          - pattern: '($C : *gin.Context).Query(...)'
+    pattern-sinks:
+      - pattern-either:
+          - pattern: http.Get(...)
+          - pattern: http.Post(...)
+          - pattern: http.NewRequest($M, $URL, ...)
+          - pattern: http.NewRequestWithContext($CTX, $M, $URL, ...)
+
+  - id: go-path-traversal
+    languages: [go]
+    severity: ERROR
+    message: Ruta de fichero construida con datos de la petición (path traversal).
+    metadata:
+      title: Path traversal
+      severity: high
+      cwe: ["CWE-22: Path Traversal"]
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          - pattern: '($R : *http.Request).URL.Query().Get(...)'
+          - pattern: '($R : *http.Request).FormValue(...)'
+          - pattern: '($C : *gin.Context).Param(...)'
+    pattern-sinks:
+      - pattern-either:
+          - pattern: os.Open(...)
+          - pattern: os.ReadFile(...)
+          - pattern: os.WriteFile(...)
+          - pattern: os.Remove(...)
+          - pattern: http.ServeFile($W, $R, ...)
+    pattern-sanitizers:
+      - pattern: filepath.Base(...)
+
+  - id: go-tls-insecure-skip-verify
+    languages: [go]
+    severity: ERROR
+    message: InsecureSkipVerify desactiva la validación de certificados TLS. Permite ataques man-in-the-middle.
+    metadata:
+      title: Validación TLS desactivada
+      severity: high
+      cwe: ["CWE-295: Improper Certificate Validation"]
+    pattern-either:
+      - pattern: 'tls.Config{..., InsecureSkipVerify: true, ...}'
+      - pattern: $C.InsecureSkipVerify = true
+
+  - id: go-weak-crypto
+    languages: [go]
+    severity: WARNING
+    message: Algoritmo criptográfico débil (MD5, SHA-1, DES, RC4). Usa SHA-256 o superior y AES-GCM.
+    metadata:
+      title: Criptografía débil
+      severity: medium
+      cwe: ["CWE-327: Use of a Broken or Risky Cryptographic Algorithm"]
+    pattern-either:
+      - pattern: md5.New()
+      - pattern: md5.Sum(...)
+      - pattern: sha1.New()
+      - pattern: sha1.Sum(...)
+      - pattern: des.NewCipher(...)
+      - pattern: rc4.NewCipher(...)

@@ -1,6 +1,6 @@
 # Requisitos — Plataforma SaaS de Seguridad de Código e IA
 
-> Versión 0.2 · 2026-10-13
+> Versión 0.3 · 2026-10-13
 > Cambios respecto a la 0.1: modelo 100 % SaaS self‑service, mercado internacional + España,
 > presupuesto de IA = créditos de la API de Claude, núcleo del motor ya implementado (`src/appsec_ai`).
 
@@ -57,18 +57,24 @@ Leyenda: ✅ hecho · 🔜 MVP · ⏭ posterior
 - ✅ RF‑1.4 Secretos siempre redactados: nunca se almacena el valor.
 - ✅ RF‑1.5 Salidas Markdown, JSON y SARIF 2.1.0 (GitHub Code Scanning, GitLab, Azure DevOps).
 - ✅ RF‑1.6 Modo CI: `--fail-on <severidad>`.
-- 🔜 RF‑1.7 Reglas SAST propias para Opengrep (inyección SQL, comandos, SSRF, deserialización, XSS) en Python, JS/TS, Java y Go. **Prohibido** usar reglas del registro de Semgrep (licencia incompatible con SaaS).
+- ✅ RF‑1.7 41 reglas SAST propias para Opengrep (Python 14, JS/TS 13, Java 8, Go 6), cada una con casos positivos y negativos. **Prohibido** usar reglas del registro de Semgrep (licencia incompatible con SaaS).
+- ✅ RF‑1.9 Fusión de hallazgos duplicados entre motores (misma línea y familia de CWE).
+- ✅ RF‑1.10 Supresión en el código con `appsec-ai: ignore`, `nosec` o `nosemgrep`.
 - 🔜 RF‑1.8 Escaneo incremental: en un PR solo se analizan los ficheros cambiados.
 
 ### M2. Seguridad de IA (diferenciador)
 - ✅ RF‑2.1 Inventario de IA: SDKs (Anthropic, OpenAI, Gemini, Bedrock, Mistral…), frameworks (LangChain/LangGraph, LlamaIndex, CrewAI, Agents SDK, MCP), modelos usados, herramientas de agentes y vector stores.
-- ✅ RF‑2.2 Detección (Python con análisis de flujo en el AST; JS/TS heurístico):
+- ✅ RF‑2.2 Detección con análisis de flujo (Python sobre el AST, JS/TS/JSX/TSX sobre tree-sitter):
   - LLM01: entrada del usuario en el prompt de sistema, concatenación de entrada con instrucciones, prompt injection indirecta (contenido web/ficheros/RAG).
   - LLM02: prompts/respuestas escritos en logs.
   - LLM05: salida del LLM hacia `eval`/shell, SQL, peticiones HTTP (SSRF), sistema de ficheros, HTML (XSS).
-  - LLM06: herramientas de agente con acciones peligrosas (shell, SQL de escritura, borrado, pagos, emails).
-- 🔜 RF‑2.3 Análisis de JS/TS con AST real (tree‑sitter) en lugar de heurísticas.
-- 🔜 RF‑2.4 Más reglas: LLM07 (secretos o lógica de autorización en el prompt de sistema), LLM08 (RAG sin control de acceso por documento), LLM10 (sin límites de tokens/coste/rate limit), servidores MCP sin autenticación.
+  - LLM05: la salida del LLM elige qué función se ejecuta (`getattr`, `handlers[x]()`).
+  - LLM06: herramientas de agentes y de servidores MCP con acciones peligrosas (shell, SQL dinámico o de escritura, borrado, pagos, emails, HTTP de escritura); servidores MCP por HTTP sin autenticación.
+  - LLM07: secretos en el prompt de sistema.
+  - LLM10: llamadas sin límite de tokens; agentes sin límite de iteraciones.
+- ✅ RF‑2.3 Análisis de JS/TS con AST real (tree‑sitter).
+- ✅ RF‑2.4 Validado contra código real: LangChain Community, LlamaIndex Core y CrewAI (más de 2.000 ficheros) dan 10 hallazgos, todos revisados y justificados.
+- 🔜 RF‑2.4b Más reglas: LLM08 (RAG sin control de acceso por documento), lógica de autorización delegada en el prompt, límites de frecuencia por usuario, Java y Go para IA (Spring AI, LangChain4j, SDK de Go).
 - 🔜 RF‑2.5 Mapeo a MITRE ATLAS, NIST AI RMF, ISO 42001 y EU AI Act en el informe.
 - ⏭ RF‑2.6 Modelo de amenazas generado por sistema de IA (flujo de datos, activos, caminos de ataque).
 - ⏭ RF‑2.7 Red teaming dinámico: pruebas automáticas de prompt injection/jailbreak contra el endpoint desplegado.
@@ -138,7 +144,8 @@ Precios iguales en € y $ para simplificar. **Meta:** 20 clientes Team ≈ 5.00
 | Semana | Entregable |
 |---|---|
 | ✅ 0 | Núcleo del motor + motor de IA + triage con Claude + CLI + tests |
-| 1 | Probar el triage con la API real; conjunto de evaluación; reglas SAST propias |
+| ✅ 1 | 41 reglas SAST propias; motor de IA con tree-sitter y 15 reglas; validación con código real |
+| 1 | Probar el triage con la API real; conjunto de evaluación |
 | 1–2 | Landing bilingüe con lista de espera y precios; reclutar 5–10 design partners entre tus contactos |
 | 2–4 | GitHub App + comentarios en PR + cola + workers en contenedores |
 | 4–6 | Panel web, Stripe, informes PDF, inglés/español |

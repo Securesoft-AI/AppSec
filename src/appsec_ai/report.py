@@ -30,6 +30,8 @@ def to_markdown(result: ScanResult, include_suppressed: bool = False) -> str:
     out.append("")
     if suppressed:
         out += [f"_{suppressed} hallazgos descartados como falsos positivos por el triage con IA._", ""]
+    if result.suppressed_inline:
+        out += [f"_{result.suppressed_inline} hallazgos silenciados en el código (`nosec` / `appsec-ai: ignore`)._", ""]
 
     by_cat = Counter(f.category.value for f in findings)
     out += ["| Área | Hallazgos |", "|---|---|"]

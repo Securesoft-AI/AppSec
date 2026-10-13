@@ -1,0 +1,196 @@
+# Reglas SAST propias para Java (Servlets, Spring).
+rules:
+  - id: java-sql-injection
+    languages: [java]
+    severity: ERROR
+    message: >-
+      Consulta SQL construida concatenando cadenas. Usa PreparedStatement con parámetros (?) o
+      consultas con parámetros con nombre en JPA.
+    metadata:
+      title: Inyección SQL
+      severity: high
+      cwe: ["CWE-89: SQL Injection"]
+      owasp: ["A03:2021 Injection"]
+    patterns:
+      - pattern-either:
+          - pattern: (java.sql.Statement $S).$M("..." + $X, ...)
+          - pattern: (Statement $S).$M("..." + $X, ...)
+          - pattern: $S.executeQuery("..." + $X)
+          - pattern: $S.executeUpdate("..." + $X)
+          - pattern: $S.execute("..." + $X)
+          - pattern: $EM.createQuery("..." + $X, ...)
+          - pattern: $EM.createNativeQuery("..." + $X, ...)
+          - pattern: $T.queryForList("..." + $X, ...)
+          - pattern: $T.queryForObject("..." + $X, ...)
+          - pattern: $T.update("..." + $X, ...)
+          - pattern: $S.executeQuery(String.format(...))
+          - pattern: $EM.createQuery(String.format(...), ...)
+      - metavariable-regex:
+          metavariable: $X
+          regex: ^(?!\s*"[^"]*"\s*$).*
+
+  - id: java-command-injection
+    languages: [java]
+    severity: ERROR
+    message: Comando del sistema construido con datos de la petición. Ejecución remota de comandos.
+    metadata:
+      title: Inyección de comandos
+      severity: critical
+      cwe: ["CWE-78: OS Command Injection"]
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          - pattern: (HttpServletRequest $R).getParameter(...)
+          - pattern: (HttpServletRequest $R).getHeader(...)
+          - patterns:
+              - pattern-inside: |
+                  $RET $METHOD(..., @RequestParam $T $P, ...) { ... }
+              - pattern: $P
+          - patterns:
+              - pattern-inside: |
+                  $RET $METHOD(..., @PathVariable $T $P, ...) { ... }
+              - pattern: $P
+          - patterns:
+              - pattern-inside: |
+                  $RET $METHOD(..., @RequestBody $T $P, ...) { ... }
+              - pattern: $P
+    pattern-sinks:
+      - pattern-either:
+          - pattern: Runtime.getRuntime().exec(...)
+          - pattern: new ProcessBuilder(...)
+          - pattern: (ProcessBuilder $PB).command(...)
+
+  - id: java-ssrf
+    languages: [java]
+    severity: ERROR
+    message: El servidor abre conexiones a una URL controlada por el usuario (SSRF).
+    metadata:
+      title: Server-Side Request Forgery
+      severity: high
+      cwe: ["CWE-918: Server-Side Request Forgery"]
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          - pattern: (HttpServletRequest $R).getParameter(...)
+          - patterns:
+              - pattern-inside: |
+                  $RET $METHOD(..., @RequestParam $T $P, ...) { ... }
+              - pattern: $P
+    pattern-sinks:
+      - pattern-either:
+          - pattern: new URL(...)
+          - pattern: URI.create(...)
+          - pattern: (RestTemplate $RT).$M(...)
+          - pattern: (WebClient $WC).get().uri(...)
+
+  - id: java-path-traversal
+    languages: [java]
+    severity: ERROR
+    message: Ruta de fichero construida con datos de la petición (path traversal).
+    metadata:
+      title: Path traversal
+      severity: high
+      cwe: ["CWE-22: Path Traversal"]
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          - pattern: (HttpServletRequest $R).getParameter(...)
+          - patterns:
+              - pattern-inside: |
+                  $RET $METHOD(..., @RequestParam $T $P, ...) { ... }
+              - pattern: $P
+          - patterns:
+              - pattern-inside: |
+                  $RET $METHOD(..., @PathVariable $T $P, ...) { ... }
+              - pattern: $P
+    pattern-sinks:
+      - pattern-either:
+          - pattern: new File(...)
+          - pattern: new FileInputStream(...)
+          - pattern: new FileOutputStream(...)
+          - pattern: Paths.get(...)
+          - pattern: Path.of(...)
+    pattern-sanitizers:
+      - pattern: FilenameUtils.getName(...)
+
+  - id: java-insecure-deserialization
+    languages: [java]
+    severity: ERROR
+    message: >-
+      Deserialización nativa de Java con ObjectInputStream: con datos no confiables permite ejecutar
+      código. Usa JSON o un filtro de clases (ObjectInputFilter).
+    metadata:
+      title: Deserialización insegura
+      severity: high
+      cwe: ["CWE-502: Deserialization of Untrusted Data"]
+    patterns:
+      - pattern-either:
+          - pattern: (ObjectInputStream $O).readObject()
+          - pattern: new ObjectInputStream(...).readObject()
+          - pattern: new XMLDecoder(...)
+      - pattern-not-inside: |
+          $O.setObjectInputFilter(...);
+          ...
+
+  - id: java-xxe
+    languages: [java]
+    severity: ERROR
+    message: >-
+      Parser XML sin desactivar entidades externas (XXE): permite leer ficheros del servidor o hacer SSRF.
+      Activa XMLConstants.FEATURE_SECURE_PROCESSING y desactiva DOCTYPE.
+    metadata:
+      title: XML External Entities
+      severity: high
+      cwe: ["CWE-611: Improper Restriction of XML External Entity Reference"]
+    patterns:
+      - pattern-either:
+          - pattern: DocumentBuilderFactory.newInstance()
+          - pattern: SAXParserFactory.newInstance()
+          - pattern: XMLInputFactory.newInstance()
+          - pattern: XMLInputFactory.newFactory()
+      - pattern-not-inside: |
+          $F = $FACTORY.newInstance();
+          ...
+          $F.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
+      - pattern-not-inside: |
+          $T $F = $FACTORY.newInstance();
+          ...
+          $F.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
+      - pattern-not-inside: |
+          $T $F = $FACTORY.newInstance();
+          ...
+          $F.setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true);
+      - pattern-not-inside: |
+          $T $F = $FACTORY.$NEW();
+          ...
+          $F.setProperty(XMLInputFactory.SUPPORT_DTD, false);
+
+  - id: java-weak-crypto
+    languages: [java]
+    severity: WARNING
+    message: Algoritmo criptográfico débil (DES, RC4, MD5, SHA-1 o AES en modo ECB). Usa AES-GCM y SHA-256 o superior.
+    metadata:
+      title: Criptografía débil
+      severity: medium
+      cwe: ["CWE-327: Use of a Broken or Risky Cryptographic Algorithm"]
+    patterns:
+      - pattern-either:
+          - pattern: Cipher.getInstance("$ALG", ...)
+          - pattern: MessageDigest.getInstance("$ALG", ...)
+      - metavariable-regex:
+          metavariable: $ALG
+          regex: (?i)^(DES|DESede|RC2|RC4|Blowfish|MD2|MD4|MD5|SHA-?1|AES|AES/ECB/.*|DES/.*)$
+
+  - id: java-tls-trust-all
+    languages: [java]
+    severity: ERROR
+    message: TrustManager o HostnameVerifier que aceptan cualquier certificado. Permite ataques man-in-the-middle.
+    metadata:
+      title: Validación TLS desactivada
+      severity: high
+      cwe: ["CWE-295: Improper Certificate Validation"]
+    pattern-either:
+      - pattern: |
+          public void checkServerTrusted(...) { }
+      - pattern: |
+          public boolean verify(String $H, SSLSession $S) { return true; }

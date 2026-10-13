@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 from abc import ABC, abstractmethod
 from pathlib import Path
 
@@ -14,6 +15,17 @@ IGNORED_DIRS = {
     ".git", ".venv", "venv", "node_modules", "__pycache__", "dist", "build",
     ".tox", ".mypy_cache", ".pytest_cache", ".appsec-ai-cache", "vendor",
 }
+
+
+MAX_FILE_BYTES = 1_000_000
+
+
+def iter_source_files(target: Path, exts: set[str]):
+    """Ficheros de código del repositorio, sin dependencias de terceros ni artefactos."""
+    for path in sorted(target.rglob("*")):
+        if path.suffix in exts and path.is_file() and not (set(path.relative_to(target).parts) & IGNORED_DIRS):
+            if path.stat().st_size <= MAX_FILE_BYTES:
+                yield path
 
 
 class EngineError(RuntimeError):
@@ -28,20 +40,20 @@ class Engine(ABC):
         return self.binary is None or self.find_binary() is not None
 
     def find_binary(self) -> str | None:
-        if self.binary is None:
-            return None
-        found = shutil.which(self.binary)
-        if found:
-            return found
-        # Binarios instalados en el mismo entorno virtual que este paquete.
-        import sys
-
-        candidate = Path(sys.executable).parent / self.binary
-        return str(candidate) if candidate.exists() else None
+        return which(self.binary) if self.binary else None
 
     @abstractmethod
     def run(self, target: Path) -> list[Finding]:
         ...
+
+
+def which(binary: str) -> str | None:
+    """Busca en el PATH y en el entorno virtual de este paquete."""
+    found = shutil.which(binary)
+    if found:
+        return found
+    candidate = Path(sys.executable).parent / binary
+    return str(candidate) if candidate.exists() else None
 
 
 def run_json(cmd: list[str], ok_codes: tuple[int, ...] = (0, 1), timeout: int = 900) -> object:

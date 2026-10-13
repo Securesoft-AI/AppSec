@@ -1,0 +1,284 @@
+# Reglas SAST propias para JavaScript/TypeScript (Node.js, Express, Next.js, navegador).
+rules:
+  - id: js-sql-injection
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      Consulta SQL construida con datos de la petición. Usa consultas parametrizadas
+      (db.query("... WHERE id = $1", [id])).
+    metadata:
+      title: Inyección SQL
+      severity: high
+      cwe: ["CWE-89: SQL Injection"]
+      owasp: ["A03:2021 Injection"]
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          - pattern: $REQ.query
+          - pattern: $REQ.body
+          - pattern: $REQ.params
+          - pattern: $REQ.headers
+          - pattern: $REQ.cookies
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: $DB.query($Q, ...)
+              - pattern: $DB.execute($Q, ...)
+              - pattern: $DB.raw($Q, ...)
+              - pattern: $DB.$queryRawUnsafe($Q, ...)
+              - pattern: $DB.$executeRawUnsafe($Q, ...)
+          - focus-metavariable: $Q
+    pattern-sanitizers:
+      - pattern: parseInt(...)
+      - pattern: Number(...)
+
+  - id: js-command-injection
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      Comando del sistema construido con datos de la petición: ejecución remota de comandos.
+      Usa execFile/spawn con una lista de argumentos y sin shell.
+    metadata:
+      title: Inyección de comandos
+      severity: critical
+      cwe: ["CWE-78: OS Command Injection"]
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          - pattern: $REQ.query
+          - pattern: $REQ.body
+          - pattern: $REQ.params
+          - pattern: $REQ.headers
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: $CP.exec($CMD, ...)
+              - pattern: $CP.execSync($CMD, ...)
+              - pattern: exec($CMD, ...)
+              - pattern: execSync($CMD, ...)
+              - pattern: '$CP.spawn($CMD, ..., {..., shell: true, ...})'
+          - focus-metavariable: $CMD
+
+  - id: js-code-injection
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: Datos de la petición evaluados como código (eval/Function/vm). Ejecución remota de código.
+    metadata:
+      title: Inyección de código
+      severity: critical
+      cwe: ["CWE-95: Eval Injection"]
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          - pattern: $REQ.query
+          - pattern: $REQ.body
+          - pattern: $REQ.params
+    pattern-sinks:
+      - pattern-either:
+          - pattern: eval(...)
+          - pattern: new Function(...)
+          - pattern: Function(...)
+          - pattern: vm.runInNewContext(...)
+          - pattern: vm.runInThisContext(...)
+          - pattern: setTimeout($X, ...)
+
+  - id: js-ssrf
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      El servidor hace peticiones a una URL controlada por el usuario (SSRF). Valida el destino con una
+      lista blanca de dominios y bloquea direcciones internas.
+    metadata:
+      title: Server-Side Request Forgery
+      severity: high
+      cwe: ["CWE-918: Server-Side Request Forgery"]
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          - pattern: $REQ.query
+          - pattern: $REQ.body
+          - pattern: $REQ.params
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: fetch($URL, ...)
+              - pattern: axios.$M($URL, ...)
+              - pattern: axios($URL, ...)
+              - pattern: http.get($URL, ...)
+              - pattern: https.get($URL, ...)
+              - pattern: got($URL, ...)
+          - focus-metavariable: $URL
+
+  - id: js-path-traversal
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      Ruta de fichero construida con datos de la petición (path traversal). Normaliza la ruta con
+      path.resolve y comprueba que queda dentro del directorio permitido.
+    metadata:
+      title: Path traversal
+      severity: high
+      cwe: ["CWE-22: Path Traversal"]
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          - pattern: $REQ.query
+          - pattern: $REQ.body
+          - pattern: $REQ.params
+    pattern-sinks:
+      - pattern-either:
+          - pattern: fs.$F(...)
+          - pattern: $RES.sendFile(...)
+          - pattern: $RES.download(...)
+    pattern-sanitizers:
+      - pattern: path.basename(...)
+
+  - id: js-reflected-xss
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: Datos de la petición enviados en la respuesta HTML sin escapar (XSS reflejado).
+    metadata:
+      title: Cross-Site Scripting reflejado
+      severity: medium
+      cwe: ["CWE-79: Cross-site Scripting"]
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          - pattern: $REQ.query
+          - pattern: $REQ.body
+          - pattern: $REQ.params
+    pattern-sinks:
+      - pattern-either:
+          - pattern: $RES.send(...)
+          - pattern: $RES.write(...)
+          - pattern: $RES.end(...)
+    pattern-sanitizers:
+      - pattern: escapeHtml(...)
+      - pattern: escape(...)
+      - pattern: DOMPurify.sanitize(...)
+      - pattern: $RES.json(...)
+
+  - id: js-dom-xss
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: >-
+      HTML insertado en el DOM desde una variable (innerHTML/outerHTML/document.write/
+      dangerouslySetInnerHTML). Usa textContent o sanea con DOMPurify.
+    metadata:
+      title: XSS en el DOM
+      severity: medium
+      cwe: ["CWE-79: Cross-site Scripting"]
+    patterns:
+      - pattern-either:
+          - pattern: $EL.innerHTML = $X
+          - pattern: $EL.outerHTML = $X
+          - pattern: document.write($X)
+          - pattern: '<$T dangerouslySetInnerHTML={{__html: $X}} />'
+          - pattern: '{dangerouslySetInnerHTML: {__html: $X}}'
+      - pattern-not: $EL.innerHTML = "..."
+      - pattern-not: $EL.innerHTML = DOMPurify.sanitize(...)
+      - pattern-not: '<$T dangerouslySetInnerHTML={{__html: DOMPurify.sanitize(...)}} />'
+
+  - id: js-open-redirect
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: Redirección a una URL controlada por el usuario (open redirect), útil para phishing.
+    metadata:
+      title: Open redirect
+      severity: medium
+      cwe: ["CWE-601: Open Redirect"]
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          - pattern: $REQ.query
+          - pattern: $REQ.body
+          - pattern: $REQ.params
+    pattern-sinks:
+      - pattern: $RES.redirect(...)
+
+  - id: js-nosql-injection
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      Objeto de la petición usado directamente como filtro de MongoDB. Un atacante puede enviar
+      operadores ({"$ne": null}) para saltarse la autenticación. Convierte los valores a String.
+    metadata:
+      title: Inyección NoSQL
+      severity: high
+      cwe: ["CWE-943: Improper Neutralization of Special Elements in Data Query Logic"]
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          - pattern: $REQ.body
+          - pattern: $REQ.query
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: $M.find($F, ...)
+              - pattern: $M.findOne($F, ...)
+              - pattern: $M.deleteMany($F, ...)
+              - pattern: $M.updateOne($F, ...)
+          - focus-metavariable: $F
+    pattern-sanitizers:
+      - pattern: String(...)
+      - pattern: mongoSanitize(...)
+
+  - id: js-tls-verification-disabled
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: Verificación de certificados TLS desactivada. Permite ataques man-in-the-middle.
+    metadata:
+      title: Verificación TLS desactivada
+      severity: medium
+      cwe: ["CWE-295: Improper Certificate Validation"]
+    pattern-either:
+      - pattern: '{..., rejectUnauthorized: false, ...}'
+      - pattern: process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0"
+      - pattern: process.env["NODE_TLS_REJECT_UNAUTHORIZED"] = "0"
+
+  - id: js-jwt-insecure
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      JWT inseguro: se acepta el algoritmo "none" o se decodifica sin verificar la firma para tomar
+      decisiones de autenticación. Usa jwt.verify con una lista explícita de algoritmos.
+    metadata:
+      title: JWT sin verificar firma
+      severity: high
+      cwe: ["CWE-347: Improper Verification of Cryptographic Signature"]
+    pattern-either:
+      - pattern: 'jwt.verify($T, $K, {..., algorithms: [..., "none", ...], ...}, ...)'
+      - pattern: 'jwt.sign($P, $K, {..., algorithm: "none", ...}, ...)'
+      - patterns:
+          - pattern: |
+              if (<... jwt.decode(...) ...>) { ... }
+
+  - id: js-insecure-cookie
+    languages: [javascript, typescript]
+    severity: INFO
+    message: Cookie de sesión sin httpOnly o secure. Puede ser robada mediante XSS o por la red.
+    metadata:
+      title: Cookie insegura
+      severity: low
+      cwe: ["CWE-614: Sensitive Cookie Without Secure Attribute"]
+    patterns:
+      - pattern-either:
+          - pattern: '$RES.cookie($N, $V, {..., httpOnly: false, ...})'
+          - pattern: '$RES.cookie($N, $V, {..., secure: false, ...})'
+
+  - id: js-weak-random-token
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: Math.random() no es criptográficamente seguro para tokens o secretos. Usa crypto.randomBytes o crypto.randomUUID.
+    metadata:
+      title: Aleatoriedad débil
+      severity: medium
+      cwe: ["CWE-338: Use of Cryptographically Weak PRNG"]
+    patterns:
+      - pattern-either:
+          - pattern: $V = <... Math.random() ...>
+          - pattern: const $V = <... Math.random() ...>
+          - pattern: let $V = <... Math.random() ...>
+      - metavariable-regex:
+          metavariable: $V
+          regex: (?i).*(token|secret|password|passwd|session|nonce|otp|apikey|api_key).*

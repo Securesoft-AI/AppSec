@@ -13,10 +13,11 @@ import os
 import tempfile
 from pathlib import Path
 
-from appsec_ai.engines.base import Engine, read_lines, relpath, run_json
+from appsec_ai.engines.base import Engine, iter_source_files, read_lines, relpath, run_json, which
 from appsec_ai.models import Category, Finding, Severity
 
 RULES_DIR = Path(__file__).resolve().parent.parent / "rules"
+SAST_EXTENSIONS = {".py", ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".java", ".go"}
 
 
 class GitleaksEngine(Engine):
@@ -150,19 +151,24 @@ class OpengrepEngine(Engine):
     name = "opengrep"
 
     def find_binary(self) -> str | None:
-        import shutil
-
-        return shutil.which("opengrep") or shutil.which("semgrep")
+        return which("opengrep") or which("semgrep")
 
     def available(self) -> bool:
         return self.find_binary() is not None and (RULES_DIR / "sast").exists()
 
     def run(self, target: Path) -> list[Finding]:
-        data = run_json(
-            [self.find_binary(), "scan", "--json", "--quiet", "--metrics=off",
-             "--config", str(RULES_DIR / "sast"), str(target)],
-            ok_codes=(0, 1),
-        )
+        # Se pasan los ficheros explícitamente para aplicar nuestras exclusiones y no las de
+        # Semgrep/Opengrep (que por defecto ignoran, por ejemplo, las carpetas tests/).
+        files = [str(p) for p in iter_source_files(target, SAST_EXTENSIONS)]
+        results: list[dict] = []
+        for i in range(0, len(files), 500):
+            data = run_json(
+                [self.find_binary(), "scan", "--json", "--quiet", "--metrics=off", "--disable-version-check",
+                 "--config", str(RULES_DIR / "sast"), *files[i:i + 500]],
+                ok_codes=(0, 1),
+            )
+            results += (data or {}).get("results", [])
+        data = {"results": results}
         findings = []
         for r in (data or {}).get("results", []):
             extra = r.get("extra", {})

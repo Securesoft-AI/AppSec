@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from appsec_ai.engines.ai_security import AISecurityEngine
@@ -37,7 +38,7 @@ def scan(target: Path, engines: list[str] | None = None, triager: Triager | None
         if isinstance(engine, AISecurityEngine):
             ai_engine = engine
 
-    result.findings = dedupe(result.findings)
+    result.findings, result.suppressed_inline = apply_inline_suppressions(target, dedupe(result.findings))
     if ai_engine:
         result.ai_inventory = ai_engine.inventory
 
@@ -52,12 +53,59 @@ def scan(target: Path, engines: list[str] | None = None, triager: Triager | None
     return result
 
 
+SUPPRESSION = re.compile(r"(?i)(\bnosec\b|\bnosemgrep\b|appsec-ai:\s*ignore)")
+
+
+def apply_inline_suppressions(target: Path, findings: list[Finding]) -> tuple[list[Finding], int]:
+    """Descarta hallazgos marcados en el código con `nosec`, `nosemgrep` o `appsec-ai: ignore`
+    en la propia línea o en la anterior."""
+    cache: dict[str, list[str]] = {}
+    kept, dropped = [], 0
+    for f in findings:
+        if f.line and f.file:
+            if f.file not in cache:
+                try:
+                    cache[f.file] = (target / f.file).read_text(errors="replace").splitlines()
+                except OSError:
+                    cache[f.file] = []
+            lines = cache[f.file]
+            window = lines[max(0, f.line - 2): min(len(lines), (f.end_line or f.line))]
+            if any(SUPPRESSION.search(l) for l in window):
+                dropped += 1
+                continue
+        kept.append(f)
+    return kept, dropped
+
+
+# CWE distintos que describen el mismo problema a efectos de fusionar hallazgos.
+CWE_FAMILY = {"CWE-77": "exec", "CWE-78": "exec", "CWE-94": "exec", "CWE-95": "exec"}
+
+
 def dedupe(findings: list[Finding]) -> list[Finding]:
+    """Elimina duplicados exactos y fusiona el mismo problema detectado por varios motores.
+
+    Dos hallazgos son el mismo problema si están en la misma línea y comparten CWE. Se conserva
+    el del motor de IA (tiene más contexto) o, si no, el más grave; el otro queda como referencia.
+    """
     seen: set[str] = set()
-    out = []
+    unique = []
     for f in findings:
         key = f"{f.fingerprint}|{f.line}"
         if key not in seen:
             seen.add(key)
+            unique.append(f)
+
+    def cwes(f: Finding) -> set[str]:
+        return {CWE_FAMILY.get(x, x) for x in f.frameworks if x.startswith("CWE-")}
+
+    def priority(f: Finding) -> tuple[int, int]:
+        return (1 if f.engine == "ai-security" else 0, f.severity.rank)
+
+    out: list[Finding] = []
+    for f in sorted(unique, key=priority, reverse=True):
+        twin = next((o for o in out if f.line and o.file == f.file and o.line == f.line and cwes(o) & cwes(f)), None)
+        if twin is None:
             out.append(f)
+        else:
+            twin.frameworks.append(f"{f.engine}:{f.rule_id}")
     return out

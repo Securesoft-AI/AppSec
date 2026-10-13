@@ -115,5 +115,6 @@ class ScanResult(BaseModel):
     findings: list[Finding] = Field(default_factory=list)
     ai_inventory: list[AIComponent] = Field(default_factory=list)
     engines: list[EngineRun] = Field(default_factory=list)
+    suppressed_inline: int = 0
     ai_summary: str = ""
     llm_usage: dict[str, int] = Field(default_factory=dict)

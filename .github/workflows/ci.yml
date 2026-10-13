@@ -23,7 +23,7 @@ jobs:
           go install github.com/zricethezav/gitleaks/v8@v8.21.2
           go install github.com/google/osv-scanner/v2/cmd/osv-scanner@v2.0.2
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
-      - run: pip install -e ".[dev]"
+      - run: pip install -e ".[dev,sast]"
       - run: pytest -q
       - name: Escanear el propio código
-        run: appsec-ai scan src --engines ai-security,gitleaks,osv-scanner --fail-on high
+        run: appsec-ai scan src --engines ai-security,opengrep,gitleaks,osv-scanner --fail-on high

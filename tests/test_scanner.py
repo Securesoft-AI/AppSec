@@ -38,7 +38,48 @@ def test_detects_llm_risks_in_typescript():
         "llm05-llm-output-to-code-exec",
         "llm05-llm-output-to-html",
         "llm01-untrusted-input-in-system-prompt",
+        "llm10-no-output-limit",
     }
+
+
+AGENTS = Path(__file__).parent / "fixtures" / "ai_agents"
+
+
+def test_agents_mcp_and_new_rules():
+    assert ai_rules(AGENTS) == {
+        # Python: FastMCP, LangChain, OpenAI
+        ("agents.py", 20, "llm06-excessive-agency-tool"),        # @mcp.tool que borra ficheros
+        ("agents.py", 33, "llm07-secret-in-system-prompt"),      # contraseña en el prompt de sistema
+        ("agents.py", 33, "llm10-no-output-limit"),              # chat.completions sin max_tokens
+        ("agents.py", 41, "llm05-llm-output-selects-function"),  # getattr(tools, salida)
+        ("agents.py", 42, "llm05-llm-output-to-request"),        # requests.get(salida)
+        ("agents.py", 44, "llm05-llm-output-to-filesystem"),     # open(salida)
+        ("agents.py", 49, "llm10-unbounded-agent-loop"),         # max_iterations=None
+        ("agents.py", 53, "llm06-mcp-http-without-auth"),        # mcp.run(transport="http") sin auth
+        # TypeScript: Vercel AI SDK y MCP SDK
+        ("agent_tools.ts", 14, "llm06-excessive-agency-tool"),   # tool() con execSync
+        ("agent_tools.ts", 27, "llm07-secret-in-system-prompt"),
+        ("agent_tools.ts", 27, "llm10-no-output-limit"),
+        ("agent_tools.ts", 33, "llm05-llm-output-selects-function"),  # handlers[text]()
+        ("agent_tools.ts", 34, "llm05-llm-output-to-request"),   # fetch(text)
+        ("agent_tools.ts", 35, "llm05-llm-output-to-filesystem"),
+        ("agent_tools.ts", 36, "llm02-llm-io-logged"),
+        ("agent_tools.ts", 39, "llm01-indirect-prompt-injection"),  # documento descargado en el prompt
+        ("agent_tools.ts", 48, "llm06-excessive-agency-tool"),   # server.tool que borra ficheros
+        ("agent_tools.ts", 52, "llm06-mcp-http-without-auth"),
+    }
+
+
+def test_agents_inventory_names_tools():
+    engine = AISecurityEngine()
+    engine.run(AGENTS)
+    inv = {(c.kind, c.name) for c in engine.inventory}
+    assert {("agent_tool", "shell"), ("agent_tool", "weather"), ("mcp_tool", "delete_file"),
+            ("mcp_tool", "count_users"), ("mcp_server", "mcp"), ("framework", "Vercel AI SDK")} <= inv
+
+
+def test_safe_typescript_has_no_findings():
+    assert not [f for f in AISecurityEngine().run(AGENTS) if f.file == "safe.tsx"]
 
 
 def test_ai_inventory():
@@ -177,6 +218,37 @@ def test_fingerprint_ignores_line_numbers():
     assert a.fingerprint == b.fingerprint
 
 
+def test_cross_engine_findings_are_merged():
+    from appsec_ai.scanner import dedupe
+
+    def mk(engine, rule, cwe, sev=Severity.HIGH):
+        return Finding(engine=engine, rule_id=rule, category=Category.SAST, severity=sev, title=rule,
+                       file="app.py", line=10, snippet=rule, frameworks=[cwe])
+
+    merged = dedupe([mk("opengrep", "python-code-injection", "CWE-95", Severity.CRITICAL),
+                     mk("ai-security", "llm05-llm-output-to-code-exec", "CWE-94"),
+                     mk("opengrep", "python-ssrf", "CWE-918")])
+    assert [f.rule_id for f in merged] == ["llm05-llm-output-to-code-exec", "python-ssrf"]
+    assert "opengrep:python-code-injection" in merged[0].frameworks
+
+
+RULES_DIR = Path(__file__).parent.parent / "src" / "appsec_ai" / "rules" / "sast"
+RULE_TESTS = Path(__file__).parent / "rules"
+
+
+@pytest.mark.skipif(not (shutil.which("opengrep") or shutil.which("semgrep")), reason="opengrep/semgrep no instalado")
+@pytest.mark.parametrize("lang", ["python", "javascript", "java", "go"])
+def test_sast_rules(lang):
+    """Cada regla tiene casos positivos (ruleid) y negativos (ok) en tests/rules/."""
+    import subprocess
+
+    binary = shutil.which("opengrep") or shutil.which("semgrep")
+    target = next(RULE_TESTS.glob(f"{lang}.*"))
+    proc = subprocess.run([binary, "--test", "--metrics=off", "--config", str(RULES_DIR / f"{lang}.yaml"), str(target)],
+                          capture_output=True, text=True, timeout=600)
+    assert proc.returncode == 0, proc.stdout[-2000:] + proc.stderr[-2000:]
+
+
 @pytest.mark.skipif(not shutil.which("gitleaks"), reason="gitleaks no instalado")
 def test_gitleaks_redacts_secrets():
     result = scan(FIXTURE, engines=["gitleaks"])
@@ -192,3 +264,19 @@ def test_cli_fail_on(tmp_path):
                  "-o", str(out), "--fail-on", "critical"]) == 1
     assert json.loads(out.read_text())["version"] == "2.1.0"
     assert main(["scan", str(tmp_path), "--engines", "ai-security", "--fail-on", "low"]) == 0
+
+
+def test_inline_suppressions(tmp_path):
+    (tmp_path / "a.py").write_text(
+        "import anthropic\n"
+        "client = anthropic.Anthropic()\n"
+        "def f():\n"
+        "    r = client.messages.create(model='m', max_tokens=10, messages=[])\n"
+        "    eval(r.content[0].text)  # appsec-ai: ignore\n"
+        "    # nosec\n"
+        "    exec(r.content[0].text)\n"
+        "    print(r)\n"
+    )
+    result = scan(tmp_path, engines=["ai-security"])
+    assert [f.rule_id for f in result.findings] == ["llm02-llm-io-logged"]
+    assert result.suppressed_inline == 2
