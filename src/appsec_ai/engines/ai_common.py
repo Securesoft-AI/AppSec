@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
+from appsec_ai.compliance import atlas_refs
 from appsec_ai.models import AIComponent, Category, Finding, Severity
 
 OWASP = {
@@ -229,7 +230,7 @@ class FindingSink:
             engine=self.engine, rule_id=rule_id, category=Category.AI, severity=r.severity,
             title=title or r.title, message=(r.message + (" " + extra if extra else "")).strip(),
             file=self.rel, line=start, end_line=end, snippet=self.snippet(start, min(end, start + 15)),
-            frameworks=[OWASP[r.owasp], r.cwe],
+            frameworks=[OWASP[r.owasp], r.cwe, *atlas_refs(rule_id)],
         ))
 
     def component(self, kind: str, name: str, line: int, detail: str = ""):

@@ -44,6 +44,8 @@ Python se analiza sobre el AST y JS/TS sobre el árbol de [tree-sitter], con flu
 
 Frameworks reconocidos: Anthropic, OpenAI, Gemini, Bedrock, Mistral, LiteLLM, LangChain/LangGraph (Python y JS), LlamaIndex, CrewAI, AutoGen, Pydantic AI, OpenAI Agents SDK, Claude Agent SDK, Vercel AI SDK, Mastra, MCP (FastMCP y SDK oficial) y vector stores.
 
+Cada hallazgo de IA incluye sus técnicas de MITRE ATLAS, y el informe añade una tabla que mapea las reglas encontradas a MITRE ATLAS, NIST AI RMF, ISO/IEC 42001 y EU AI Act (`src/appsec_ai/compliance.py`). El mapeo es orientativo, no una evaluación de conformidad.
+
 ### SAST (`src/appsec_ai/rules/sast/`)
 
 | Lenguaje | Reglas |

@@ -261,6 +261,26 @@ def test_triage_untrusted_code_is_marked_as_data():
 
 # --- Informes ----------------------------------------------------------------------
 
+def test_every_ai_rule_has_a_compliance_mapping():
+    from appsec_ai import compliance
+    from appsec_ai.engines.ai_common import RULES
+
+    assert set(compliance.RULES) == set(RULES)
+    for m in compliance.RULES.values():
+        assert set(m.atlas) <= set(compliance.ATLAS) and m.atlas
+        assert set(m.nist) <= set(compliance.NIST)
+        assert set(m.iso42001) <= set(compliance.ISO42001)
+        assert set(m.eu_ai_act) <= set(compliance.EU_AI_ACT)
+
+
+def test_report_includes_compliance_mapping():
+    result = scan(FIXTURE, engines=["ai-security"])
+    md = report.to_markdown(result)
+    assert "## Mapeo a marcos de IA" in md
+    assert "AML.T0050 Command and Scripting Interpreter" in md  # eval de la salida del LLM
+    assert any("MITRE-ATLAS AML.T0051" in x for f in result.findings for x in f.frameworks)
+
+
 def test_sarif_and_markdown():
     result = scan(FIXTURE, engines=["ai-security"])
     sarif = report.to_sarif(result)

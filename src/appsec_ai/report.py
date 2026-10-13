@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import Counter
 
-from appsec_ai import __version__
+from appsec_ai import __version__, compliance
 from appsec_ai.models import Finding, ScanResult, Severity
 
 SEV_ICON = {"critical": "🟥", "high": "🟧", "medium": "🟨", "low": "🟦", "info": "⬜"}
@@ -46,6 +46,8 @@ def to_markdown(result: ScanResult, include_suppressed: bool = False) -> str:
         for c in result.ai_inventory:
             out.append(f"| {c.kind} | {c.name} | `{c.file}:{c.line}` |")
         out.append("")
+
+    out += compliance.to_markdown(findings)
 
     out += ["## Hallazgos", ""]
     if not findings:

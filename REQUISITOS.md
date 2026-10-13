@@ -76,7 +76,7 @@ Leyenda: ✅ hecho · 🔜 MVP · ⏭ posterior
 - ✅ RF‑2.3 Análisis de JS/TS con AST real (tree‑sitter).
 - ✅ RF‑2.4 Validado contra código real: LangChain Community, LlamaIndex Core y CrewAI (más de 2.000 ficheros) dan 10 hallazgos, todos revisados y justificados.
 - 🔜 RF‑2.4b Más reglas: límites de frecuencia por usuario, Java y Go para IA (Spring AI, LangChain4j, SDK de Go).
-- 🔜 RF‑2.5 Mapeo a MITRE ATLAS, NIST AI RMF, ISO 42001 y EU AI Act en el informe.
+- ✅ RF‑2.5 Mapeo a MITRE ATLAS (IDs comprobados contra ATLAS v5.6.0), NIST AI RMF y su perfil de IA generativa, ISO 42001 (anexo A) y EU AI Act en el informe. Orientativo; conviene que lo revise un especialista en cumplimiento antes de venderlo como tal.
 - ⏭ RF‑2.6 Modelo de amenazas generado por sistema de IA (flujo de datos, activos, caminos de ataque).
 - ⏭ RF‑2.7 Red teaming dinámico: pruebas automáticas de prompt injection/jailbreak contra el endpoint desplegado.
 
