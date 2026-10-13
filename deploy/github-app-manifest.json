@@ -9,7 +9,7 @@
   "redirect_url": "https://TU-DOMINIO/",
   "public": true,
   "default_permissions": {
-    "contents": "read",
+    "contents": "write",
     "metadata": "read",
     "pull_requests": "write",
     "checks": "write"

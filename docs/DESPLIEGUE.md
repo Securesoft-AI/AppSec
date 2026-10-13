@@ -26,7 +26,8 @@ GitHub ──webhook──► API (FastAPI)  ──► Postgres (tabla scans = c
 2. Rellena los datos con los de `deploy/github-app-manifest.json`:
    - **Webhook URL:** `https://TU-DOMINIO/webhooks/github`.
    - **Webhook secret:** una cadena aleatoria larga (`openssl rand -hex 32`). Es el valor de `GITHUB_WEBHOOK_SECRET`.
-   - **Permisos del repositorio:** Contents *Read*, Metadata *Read*, Pull requests *Read & write*, Checks *Read & write*.
+   - **Permisos del repositorio:** Contents *Read & write*, Metadata *Read*, Pull requests *Read & write*, Checks *Read & write*.
+     La escritura en Contents solo se usa para el botón **Abrir PR con fixes**: crea una rama `appsec-ai/fix-…` y abre un PR, nunca escribe en ramas existentes. Si un cliente instala la App solo con lectura, el botón explica en el PR qué permiso falta.
    - **Eventos:** Pull request, Push, Check run.
 3. Crea la App y apunta el **App ID** (`GITHUB_APP_ID`).
 4. Genera una **clave privada**: se descarga un `.pem`. Para ponerla en una sola línea:

@@ -83,6 +83,23 @@ class Scan(Base):
     repository: Mapped[Repository] = relationship(back_populates="scans")
 
 
+class FixRequest(Base):
+    """Petición de "Abrir PR con la corrección" sobre un escaneo. También es cola de trabajos."""
+
+    __tablename__ = "fix_requests"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    scan_id: Mapped[int] = mapped_column(ForeignKey("scans.id", ondelete="CASCADE"), index=True, unique=True)
+    status: Mapped[str] = mapped_column(String(20), default=ScanStatus.QUEUED.value, index=True)
+    requested_by: Mapped[str] = mapped_column(String(200), default="")
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    error: Mapped[str] = mapped_column(Text, default="")
+    pr_url: Mapped[str] = mapped_column(String(500), default="")
+    detail: Mapped[dict] = mapped_column(JSON, default=dict)  # ficheros corregidos y descartados
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    finished_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class Database:
     def __init__(self, url: str):
         kwargs = {"connect_args": {"check_same_thread": False}} if url.startswith("sqlite") else {"pool_pre_ping": True}
@@ -97,20 +114,26 @@ class Database:
 
     def claim_next_scan(self) -> Scan | None:
         """Toma el siguiente escaneo en cola de forma atómica (varios workers en paralelo)."""
+        return self._claim(Scan, started_at=utcnow())
+
+    def claim_next_fix(self) -> FixRequest | None:
+        return self._claim(FixRequest)
+
+    def _claim(self, model, **values):
         for _ in range(5):
             with self.session() as s, s.begin():
-                scan_id = s.scalars(
-                    select(Scan.id).where(Scan.status == ScanStatus.QUEUED.value).order_by(Scan.id).limit(1)
+                job_id = s.scalars(
+                    select(model.id).where(model.status == ScanStatus.QUEUED.value).order_by(model.id).limit(1)
                 ).first()
-                if scan_id is None:
+                if job_id is None:
                     return None
                 # UPDATE condicional: si otro worker lo tomó antes, no se modifica ninguna fila.
                 claimed = s.execute(
-                    update(Scan)
-                    .where(Scan.id == scan_id, Scan.status == ScanStatus.QUEUED.value)
-                    .values(status=ScanStatus.RUNNING.value, started_at=utcnow(), attempts=Scan.attempts + 1)
+                    update(model)
+                    .where(model.id == job_id, model.status == ScanStatus.QUEUED.value)
+                    .values(status=ScanStatus.RUNNING.value, attempts=model.attempts + 1, **values)
                 ).rowcount
             if claimed:
                 with self.session() as s:
-                    return s.get(Scan, scan_id)
+                    return s.get(model, job_id)
         return None

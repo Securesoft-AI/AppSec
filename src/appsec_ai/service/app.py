@@ -11,8 +11,8 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from sqlalchemy import select
 
 from appsec_ai.service.config import Settings, get_settings
-from appsec_ai.service.db import Database, Installation, Repository, Scan
-from appsec_ai.service.webhooks import handle_event, verify_signature
+from appsec_ai.service.db import Database, FixRequest, Installation, Repository, Scan, ScanStatus
+from appsec_ai.service.webhooks import handle_event, request_fix, verify_signature
 
 log = logging.getLogger("appsec_ai.api")
 MAX_WEBHOOK_BYTES = 25 * 1024 * 1024  # límite de GitHub para webhooks
@@ -82,7 +82,31 @@ def create_app(settings: Settings | None = None, db: Database | None = None) -> 
                 raise HTTPException(status_code=404, detail="escaneo no encontrado")
             return {**_scan_summary(scan), "result": scan.result}
 
+    @app.post("/api/scans/{scan_id}/fix-pr", dependencies=[Depends(require_admin)])
+    def create_fix_pr(scan_id: int):
+        """Lo mismo que el botón "Abrir PR con fixes" del check de GitHub."""
+        with db.session() as s, s.begin():
+            scan = s.get(Scan, scan_id)
+            if scan is None:
+                raise HTTPException(status_code=404, detail="escaneo no encontrado")
+            if scan.status != ScanStatus.COMPLETED.value:
+                raise HTTPException(status_code=409, detail="el escaneo aún no ha terminado")
+            return _fix_summary(request_fix(s, scan, "api"))
+
+    @app.get("/api/scans/{scan_id}/fix-pr", dependencies=[Depends(require_admin)])
+    def get_fix_pr(scan_id: int):
+        with db.session() as s:
+            fix = s.scalars(select(FixRequest).where(FixRequest.scan_id == scan_id)).first()
+            if fix is None:
+                raise HTTPException(status_code=404, detail="sin petición de corrección")
+            return _fix_summary(fix)
+
     return app
+
+
+def _fix_summary(fix: FixRequest) -> dict:
+    return {"id": fix.id, "scan_id": fix.scan_id, "status": fix.status, "pr_url": fix.pr_url,
+            "error": fix.error, "detail": fix.detail, "requested_by": fix.requested_by}
 
 
 def _scan_summary(scan: Scan) -> dict:

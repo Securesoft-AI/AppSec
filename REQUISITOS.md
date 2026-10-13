@@ -87,7 +87,7 @@ Leyenda: ✅ hecho · 🔜 MVP · ⏭ posterior
 - ✅ RF‑3.4 Caché local por huella: reescanear sin cambios no gasta tokens.
 - ✅ RF‑3.5 Presupuesto máximo de peticiones por escaneo; los ficheros más graves se analizan primero.
 - ✅ RF‑3.6 Resumen ejecutivo de seguridad de IA para el CTO.
-- 🔜 RF‑3.7 Botón "Abrir PR con la corrección".
+- ✅ RF‑3.7 Botón "Abrir PR con fixes" en el check de GitHub (y `POST /api/scans/{id}/fix-pr`): Claude propone ediciones exactas, se validan (texto único y sintaxis) y se abre un PR para revisión humana. Requiere permiso `contents: write`.
 - 🔜 RF‑3.8 El usuario marca "útil / no útil" en cada hallazgo; ese feedback alimenta el conjunto de evaluación.
 
 ### M4. Plataforma SaaS
