@@ -8,6 +8,12 @@ from appsec_ai.models import Finding, ScanResult, Severity
 SEV_ICON = {"critical": "🟥", "high": "🟧", "medium": "🟨", "low": "🟦", "info": "⬜"}
 CATEGORY_LABEL = {"ai": "Seguridad de IA", "sast": "Código (SAST)", "secrets": "Secretos",
                   "sca": "Dependencias", "iac": "Infraestructura (IaC)"}
+CATEGORY_LABEL_EN = {"ai": "AI security", "sast": "Code (SAST)", "secrets": "Secrets",
+                     "sca": "Dependencies", "iac": "Infrastructure (IaC)"}
+
+
+def category_label(category: str, lang: str = "es") -> str:
+    return (CATEGORY_LABEL_EN if lang == "en" else CATEGORY_LABEL).get(category, category)
 
 
 def visible(result: ScanResult, include_suppressed: bool = False) -> list[Finding]:
@@ -18,72 +24,76 @@ def to_json(result: ScanResult) -> str:
     return result.model_dump_json(indent=2)
 
 
-def to_markdown(result: ScanResult, include_suppressed: bool = False) -> str:
+def to_markdown(result: ScanResult, include_suppressed: bool = False, lang: str = "es") -> str:
+    from appsec_ai.i18n import localize, ui
+
     findings = visible(result, include_suppressed)
     suppressed = sum(1 for f in result.findings if f.is_suppressed)
     counts = Counter(f.effective_severity.value for f in findings)
-    out = [f"# Informe de seguridad — `{result.target}`", ""]
+    out = [f"# {ui(lang, 'report_title')} — `{result.target}`", ""]
 
-    out += ["## Resumen", "", "| Severidad | Hallazgos |", "|---|---|"]
+    out += [f"## {ui(lang, 'summary')}", "", f"| {ui(lang, 'severity')} | {ui(lang, 'findings')} |", "|---|---|"]
     for sev in Severity:
         out.append(f"| {SEV_ICON[sev.value]} {sev.value} | {counts.get(sev.value, 0)} |")
     out.append("")
     if suppressed:
-        out += [f"_{suppressed} hallazgos descartados como falsos positivos por el triage con IA._", ""]
+        out += [f"_{ui(lang, 'suppressed_ai', n=suppressed)}_", ""]
     if result.suppressed_inline:
-        out += [f"_{result.suppressed_inline} hallazgos silenciados en el código (`nosec` / `appsec-ai: ignore`)._", ""]
+        out += [f"_{ui(lang, 'suppressed_inline', n=result.suppressed_inline)}_", ""]
 
     by_cat = Counter(f.category.value for f in findings)
-    out += ["| Área | Hallazgos |", "|---|---|"]
-    out += [f"| {CATEGORY_LABEL[c]} | {n} |" for c, n in by_cat.most_common()]
+    out += [f"| {ui(lang, 'area')} | {ui(lang, 'findings')} |", "|---|---|"]
+    out += [f"| {category_label(c, lang)} | {n} |" for c, n in by_cat.most_common()]
     out.append("")
 
     if result.ai_summary:
-        out += ["## Resumen ejecutivo de seguridad de IA", "", result.ai_summary, ""]
+        out += [f"## {ui(lang, 'exec_summary')}", "", result.ai_summary, ""]
 
-    if result.ai_inventory:
-        out += ["## Inventario de IA", "", "| Tipo | Componente | Ubicación |", "|---|---|---|"]
-        for c in result.ai_inventory:
+    inventory = [c for c in result.ai_inventory if c.kind != "llm_entrypoint"]
+    if inventory:
+        out += [f"## {ui(lang, 'ai_inventory')}", "",
+                f"| {ui(lang, 'kind')} | {ui(lang, 'component')} | {ui(lang, 'location')} |", "|---|---|---|"]
+        for c in inventory:
             out.append(f"| {c.kind} | {c.name} | `{c.file}:{c.line}` |")
         out.append("")
 
-    out += compliance.to_markdown(findings)
+    out += compliance.to_markdown(findings, lang)
 
-    out += ["## Hallazgos", ""]
+    out += [f"## {ui(lang, 'findings')}", ""]
     if not findings:
-        out += ["Sin hallazgos. 🎉", ""]
+        out += [ui(lang, "no_findings"), ""]
     for i, f in enumerate(findings, 1):
         sev = f.effective_severity.value
+        title, message = localize(f, lang)
         loc = f"`{f.file}:{f.line}`" if f.line else f"`{f.file}`"
-        out += [f"### {i}. {SEV_ICON[sev]} [{sev.upper()}] {f.title}", "",
-                f"- **Ubicación:** {loc}", f"- **Motor / regla:** {f.engine} / `{f.rule_id}`"]
+        out += [f"### {i}. {SEV_ICON[sev]} [{sev.upper()}] {title}", "",
+                f"- **{ui(lang, 'location')}:** {loc}", f"- **{ui(lang, 'engine_rule')}:** {f.engine} / `{f.rule_id}`"]
         if f.frameworks:
-            out.append(f"- **Referencias:** {', '.join(f.frameworks[:6])}")
+            out.append(f"- **{ui(lang, 'references')}:** {', '.join(f.frameworks[:6])}")
         if f.triage:
             t = f.triage
-            out.append(f"- **Veredicto IA:** {t.verdict.value} (confianza {t.confidence:.0%})")
+            out.append(f"- **{ui(lang, 'verdict')}:** {t.verdict.value} ({ui(lang, 'confidence')} {t.confidence:.0%})")
             out += ["", t.explanation]
             if t.exploit_scenario:
-                out += ["", f"**Escenario de ataque:** {t.exploit_scenario}"]
+                out += ["", f"**{ui(lang, 'attack')}:** {t.exploit_scenario}"]
             if t.fix:
-                out += ["", f"**Corrección:** {t.fix}"]
+                out += ["", f"**{ui(lang, 'fix')}:** {t.fix}"]
             if t.fixed_code:
                 out += ["", "```", t.fixed_code.strip(), "```"]
-        else:
-            if f.message:
-                out += ["", f.message]
+        elif message:
+            out += ["", message]
         if f.snippet and not (f.triage and f.triage.fixed_code):
             out += ["", "```", f.snippet.strip()[:1500], "```"]
         out.append("")
 
-    out += ["## Motores ejecutados", "", "| Motor | Estado | Detalle |", "|---|---|---|"]
+    out += [f"## {ui(lang, 'engines_run')}", "", f"| {ui(lang, 'engine')} | {ui(lang, 'status')} | {ui(lang, 'detail')} |", "|---|---|---|"]
     for e in result.engines:
-        detail = f"{e.findings} hallazgos" if e.status == "ok" else e.detail
+        detail = ui(lang, "n_findings", n=e.findings) if e.status == "ok" else e.detail
         out.append(f"| {e.engine} | {e.status} | {detail} |")
     if result.llm_usage:
         u = result.llm_usage
-        out += ["", f"_Uso de IA: {u.get('requests', 0)} peticiones, {u.get('input_tokens', 0)} tokens de entrada, "
-                    f"{u.get('output_tokens', 0)} de salida, {u.get('cache_read_input_tokens', 0)} leídos de caché._"]
+        out += ["", "_" + ui(lang, "ai_usage", r=u.get("requests", 0), i=u.get("input_tokens", 0),
+                                o=u.get("output_tokens", 0), c=u.get("cache_read_input_tokens", 0)) + "_"]
     out.append("")
     return "\n".join(out)
 

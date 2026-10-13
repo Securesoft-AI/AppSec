@@ -10,13 +10,14 @@
 from __future__ import annotations
 
 import os
+import re
 import tempfile
 from pathlib import Path
 
 from appsec_ai.compliance import atlas_refs
 from appsec_ai.engines.ai_common import OWASP
 from appsec_ai.engines.ai_common import RULES as AI_RULES
-from appsec_ai.engines.base import Engine, iter_source_files, read_lines, relpath, run_json, which
+from appsec_ai.engines.base import Engine, iter_source_files, read_lines, relpath, run_json, staged, which
 from appsec_ai.models import Category, Finding, Severity
 
 RULES_DIR = Path(__file__).resolve().parent.parent / "rules"
@@ -27,7 +28,10 @@ class GitleaksEngine(Engine):
     name = "gitleaks"
     binary = "gitleaks"
 
-    def run(self, target: Path) -> list[Finding]:
+    def run(self, target: Path, only: set[str] | None = None) -> list[Finding]:
+        if only is not None:
+            with staged(target, only) as root:
+                return self.run(root)
         fd, report = tempfile.mkstemp(suffix=".json")
         os.close(fd)
         try:
@@ -61,11 +65,21 @@ class GitleaksEngine(Engine):
         return findings
 
 
+# Manifiestos y lockfiles: OSV solo hace falta en un PR si cambia alguno.
+DEPENDENCY_FILES = re.compile(
+    r"(^|/)(requirements[^/]*\.txt|pyproject\.toml|poetry\.lock|Pipfile(\.lock)?|uv\.lock|package(-lock)?\.json"
+    r"|yarn\.lock|pnpm-lock\.yaml|go\.(mod|sum)|pom\.xml|build\.gradle(\.kts)?|gradle\.lockfile|Cargo\.(toml|lock)"
+    r"|Gemfile(\.lock)?|composer\.(json|lock))$"
+)
+
+
 class OSVEngine(Engine):
     name = "osv-scanner"
     binary = "osv-scanner"
 
-    def run(self, target: Path) -> list[Finding]:
+    def run(self, target: Path, only: set[str] | None = None) -> list[Finding]:
+        if only is not None and not any(DEPENDENCY_FILES.search(f) for f in only):
+            return []  # el PR no toca dependencias
         # 0 = sin vulnerabilidades, 1 = hay vulnerabilidades, 128 = no hay ficheros de dependencias.
         data = run_json(
             [self.find_binary(), "scan", "source", "-r", "--format", "json", str(target)],
@@ -116,7 +130,10 @@ class CheckovEngine(Engine):
     name = "checkov"
     binary = "checkov"
 
-    def run(self, target: Path) -> list[Finding]:
+    def run(self, target: Path, only: set[str] | None = None) -> list[Finding]:
+        if only is not None:
+            with staged(target, only) as root:
+                return self.run(root)
         data = run_json(
             [self.find_binary(), "-d", str(target), "-o", "json", "--quiet", "--compact",
              "--skip-download", "--framework",
@@ -159,10 +176,13 @@ class OpengrepEngine(Engine):
     def available(self) -> bool:
         return self.find_binary() is not None and (RULES_DIR / "sast").exists()
 
-    def run(self, target: Path) -> list[Finding]:
+    def run(self, target: Path, only: set[str] | None = None) -> list[Finding]:
         # Se pasan los ficheros explícitamente para aplicar nuestras exclusiones y no las de
         # Semgrep/Opengrep (que por defecto ignoran, por ejemplo, las carpetas tests/).
-        files = [str(p) for p in iter_source_files(target, SAST_EXTENSIONS)]
+        files = [str(p) for p in iter_source_files(target, SAST_EXTENSIONS)
+                 if only is None or str(p.relative_to(target)) in only]
+        if not files:
+            return []
         results: list[dict] = []
         for i in range(0, len(files), 500):
             data = run_json(

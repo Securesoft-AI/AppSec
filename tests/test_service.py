@@ -169,8 +169,14 @@ def make_worker(settings, db, fake, monkeypatch, clone=None, triager_factory=Non
     def fake_clone(self, repo, sha, dest, timeout=300):
         shutil.copytree(FIXTURE, dest)
     monkeypatch.setattr(InstallationClient, "clone", clone or fake_clone)
-    return Worker(settings, db, app, scanner=lambda p: run_scan(p, engines=["ai-security"]),
-                  triager_factory=triager_factory)
+    def scanner(p, only_files=None, engines=None):
+        scanner.calls.append(only_files)
+        scanner.engines.append(engines)
+        return run_scan(p, engines=["ai-security"], only_files=only_files)
+    scanner.calls, scanner.engines = [], []
+    worker = Worker(settings, db, app, scanner=scanner, triager_factory=triager_factory)
+    worker.scan_calls, worker.scan_engines = scanner.calls, scanner.engines
+    return worker
 
 
 def test_worker_scans_pr_and_reports_only_changed_files(env, monkeypatch):
@@ -182,6 +188,7 @@ def test_worker_scans_pr_and_reports_only_changed_files(env, monkeypatch):
 
     assert worker.run_once() is True
     assert worker.run_once() is False  # cola vacía
+    assert worker.scan_calls == [{"app.py"}]  # escaneo incremental: solo los ficheros del PR
 
     with db.session() as s:
         scan = s.get(Scan, scan_id)
@@ -284,7 +291,7 @@ def fix_worker(settings, db, fake, monkeypatch):
 
     claude = FakeClaude()
     return make_worker(settings, db, fake, monkeypatch,
-                       triager_factory=lambda n: Triager(client=claude, max_requests=n + 5)), claude
+                       triager_factory=lambda n: Triager(client=claude, max_requests=n)), claude
 
 
 def test_fix_button_opens_pr_with_validated_fix(env, monkeypatch):
@@ -382,6 +389,54 @@ def test_results_and_triage_cache_are_encrypted_at_rest(tmp_path, private_key, m
 
     cached = list((tmp_path / "cache").rglob("*.json"))
     assert cached and all(b"true_positive" not in p.read_bytes() for p in cached)
+
+
+def test_worker_publishes_in_the_installation_language(env, monkeypatch):
+    settings, db, client = env
+    install(client)
+    open_pr(client)
+    with db.session() as s, s.begin():
+        s.get(Installation, 7).language = "en"
+    fake = FakeGitHub(["app.py"])
+    worker, claude = fix_worker(settings, db, fake, monkeypatch)
+    worker.run_once()
+    done = [b for m, p, b in fake.calls if m == "PATCH" and "/check-runs/555" in p][-1]
+    assert "security finding" in done["output"]["title"] and done["actions"][0]["label"] == "Open fix PR"
+    comment = next(b for m, p, b in fake.calls if m == "POST" and p.endswith("/issues/5/comments"))
+    assert "Files changed" in comment["body"]
+    assert "Idioma de respuesta: en" in claude.calls[0]["messages"][0]["content"]  # el triage, también en inglés
+
+
+def test_ai_budget_is_enforced_and_consumed(env, monkeypatch):
+    from appsec_ai.service import plans
+
+    settings, db, client = env
+    install(client)
+    open_pr(client)
+    with db.session() as s, s.begin():
+        inst = s.get(Installation, 7)
+        inst.modules, inst.subscription_status = ["ai"], "active"
+        inst.usage_period, inst.ai_requests_used = plans.current_period(), 1499
+    fake = FakeGitHub(["app.py"])
+    worker, claude = fix_worker(settings, db, fake, monkeypatch)
+    worker.run_once()
+    assert len(claude.calls) == 1  # solo queda 1 petición este mes: triage de app.py, sin resumen
+    with db.session() as s:
+        assert s.get(Installation, 7).ai_requests_used == 1500
+
+
+def test_worker_runs_only_the_services_chosen_and_paid_for(env, monkeypatch):
+    settings, db, client = env
+    install(client)
+    open_pr(client)
+    with db.session() as s, s.begin():
+        s.get(Repository, 99).services = ["secrets", "iac"]  # el usuario elige; la prueba incluye todo
+    worker = make_worker(settings, db, FakeGitHub(["app.py"]), monkeypatch)
+    worker.run_once()
+    assert worker.scan_engines == [["gitleaks", "checkov"]]
+    with db.session() as s:
+        scan = s.query(Scan).one()
+        assert scan.status == "completed" and scan.result["findings"] == []  # los hallazgos de IA se descartan
 
 
 def test_check_rerun_requeues_scan(env, monkeypatch):

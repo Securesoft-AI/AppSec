@@ -23,10 +23,12 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--effort", default="medium", choices=["low", "medium", "high", "xhigh", "max"])
     s.add_argument("--max-requests", type=int, default=50, help="Máximo de peticiones al LLM por escaneo")
     s.add_argument("--lang", default="es", help="Idioma de las explicaciones (es, en...)")
-    s.add_argument("--format", default="markdown", choices=["markdown", "json", "sarif"])
+    s.add_argument("--format", default="markdown", choices=["markdown", "json", "sarif", "pdf"])
     s.add_argument("-o", "--output", type=Path, help="Fichero de salida (por defecto, stdout)")
     s.add_argument("--fail-on", default=None, choices=[x.value for x in Severity],
                    help="Sale con código 1 si hay hallazgos de esta severidad o superior (para CI)")
+    s.add_argument("--files-from", type=Path,
+                   help="Escaneo incremental: fichero con las rutas relativas a analizar, una por línea")
     s.add_argument("--show-suppressed", action="store_true", help="Incluye los falsos positivos descartados")
 
     sv = sub.add_parser("serve", help="Arranca la API (webhooks de GitHub y API REST)")
@@ -56,16 +58,29 @@ def main(argv: list[str] | None = None) -> int:
     if unknown:
         p.error(f"motores desconocidos: {', '.join(sorted(unknown))}")
 
-    result = scan(args.path, engines=engines, triager=triager)
+    only = None
+    if args.files_from:
+        only = {line.strip() for line in args.files_from.read_text().splitlines() if line.strip()}
+    result = scan(args.path, engines=engines, triager=triager, only_files=only)
 
-    if args.format == "json":
+    if args.format == "pdf":
+        if not args.output:
+            p.error("--format pdf necesita -o fichero.pdf")
+        from appsec_ai.report_pdf import to_pdf
+
+        args.output.write_bytes(to_pdf(result, lang=args.lang))
+        print(f"Informe escrito en {args.output}", file=sys.stderr)
+        text = None
+    elif args.format == "json":
         text = report.to_json(result)
     elif args.format == "sarif":
         text = json.dumps(report.to_sarif(result), indent=2, ensure_ascii=False)
     else:
-        text = report.to_markdown(result, include_suppressed=args.show_suppressed)
+        text = report.to_markdown(result, include_suppressed=args.show_suppressed, lang=args.lang)
 
-    if args.output:
+    if text is None:
+        pass
+    elif args.output:
         args.output.write_text(text)
         print(f"Informe escrito en {args.output}", file=sys.stderr)
     else:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import hashlib
 import hmac
 import logging
@@ -9,7 +10,8 @@ import logging
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from appsec_ai.service.db import FixRequest, Installation, Repository, Scan, ScanKind, ScanStatus
+from appsec_ai.service import plans
+from appsec_ai.service.db import FixRequest, Installation, Repository, Scan, ScanKind, ScanStatus, utcnow
 
 log = logging.getLogger("appsec_ai.webhooks")
 
@@ -39,7 +41,8 @@ def _upsert_installation(s: Session, inst: dict) -> Installation:
     row = s.get(Installation, inst["id"])
     if row is None:
         row = Installation(id=inst["id"], account_login=account.get("login", ""),
-                           account_type=account.get("type", "Organization"))
+                           account_type=account.get("type", "Organization"),
+                           trial_ends_at=utcnow() + dt.timedelta(days=plans.TRIAL_DAYS))
         s.add(row)
     row.active = True
     return row
@@ -91,6 +94,24 @@ def on_installation_repositories(s: Session, p: dict) -> dict:
 
 # -- escaneos ---------------------------------------------------------------------------------
 
+def plan_block(s: Session, repo: Repository, inst: Installation, kind: ScanKind) -> str | None:
+    """Motivo por el que el plan no permite este escaneo, o None."""
+    plan = plans.effective_plan(inst)
+    active = list(s.scalars(select(Repository.id).where(Repository.installation_id == inst.id, Repository.active)))
+    if not plans.repo_allowed(repo.id, active, plan):
+        return f"plan {plan.name}: máximo {plan.max_repos} repositorios"
+    if kind == ScanKind.PULL_REQUEST and not plan.pr_scans:
+        return f"plan {plan.name}: sin escaneo en PRs"
+    if kind in (ScanKind.FULL, ScanKind.MANUAL) and plan.min_days_between_full:
+        since = utcnow() - dt.timedelta(days=plan.min_days_between_full)
+        recent = s.scalars(select(Scan.id).where(Scan.repository_id == repo.id,
+                                                 Scan.kind.in_([ScanKind.FULL.value, ScanKind.MANUAL.value]),
+                                                 Scan.created_at >= since)).first()
+        if recent is not None:
+            return f"plan {plan.name}: un escaneo completo cada {plan.min_days_between_full} días"
+    return None
+
+
 def enqueue(s: Session, repo: Repository, kind: ScanKind, sha: str, ref: str = "", pr_number: int | None = None) -> Scan | None:
     """Encola un escaneo. Es idempotente: GitHub puede reenviar el mismo webhook."""
     inst = s.get(Installation, repo.installation_id)
@@ -104,6 +125,8 @@ def enqueue(s: Session, repo: Repository, kind: ScanKind, sha: str, ref: str = "
         if pr_number and not existing.pr_number:
             existing.pr_number = pr_number
         return existing
+    if plan_block(s, repo, inst, kind):
+        return None
     scan = Scan(repository_id=repo.id, kind=kind.value, head_sha=sha, ref=ref, pr_number=pr_number)
     s.add(scan)
     s.flush()
@@ -119,7 +142,7 @@ def on_pull_request(s: Session, p: dict) -> dict:
     repo = _upsert_repo(s, p["installation"]["id"], p["repository"])
     s.flush()
     scan = enqueue(s, repo, ScanKind.PULL_REQUEST, pr["head"]["sha"], pr["head"].get("ref", ""), pr["number"])
-    return {"scan": scan.id if scan else None}
+    return _enqueued(s, repo, scan, ScanKind.PULL_REQUEST)
 
 
 def on_push(s: Session, p: dict) -> dict:
@@ -128,7 +151,15 @@ def on_push(s: Session, p: dict) -> dict:
     if p.get("deleted") or p.get("ref") != f"refs/heads/{repo.default_branch}":
         return {"ignored": "rama distinta de la rama por defecto"}
     scan = enqueue(s, repo, ScanKind.FULL, p["after"], p["ref"])
-    return {"scan": scan.id if scan else None}
+    return _enqueued(s, repo, scan, ScanKind.FULL)
+
+
+def _enqueued(s: Session, repo: Repository, scan: Scan | None, kind: ScanKind) -> dict:
+    if scan is not None:
+        return {"scan": scan.id}
+    inst = s.get(Installation, repo.installation_id)
+    reason = plan_block(s, repo, inst, kind) if inst is not None and inst.active and repo.active else None
+    return {"scan": None, "ignored": reason} if reason else {"scan": None}
 
 
 FIX_ACTION = "open_fix_pr"
@@ -148,13 +179,24 @@ def on_check_run(s: Session, p: dict) -> dict:
     if action == "requested_action":
         if (p.get("requested_action") or {}).get("identifier") != FIX_ACTION:
             return {"ignored": "acción desconocida"}
-        return {"fix": request_fix(s, scan, (p.get("sender") or {}).get("login", "")).id}
+        try:
+            return {"fix": request_fix(s, scan, (p.get("sender") or {}).get("login", "")).id}
+        except PlanLimit as e:
+            return {"ignored": str(e)}
     scan.status, scan.attempts, scan.error, scan.check_run_id = ScanStatus.QUEUED.value, 0, "", None
     return {"scan": scan.id}
 
 
+class PlanLimit(Exception):
+    pass
+
+
 def request_fix(s: Session, scan: Scan, requested_by: str = "") -> FixRequest:
     """Encola la corrección de un escaneo. Idempotente; una petición fallida se puede repetir."""
+    inst = s.get(Installation, s.get(Repository, scan.repository_id).installation_id)
+    plan = plans.effective_plan(inst)
+    if not plan.fix_pr:
+        raise PlanLimit(f"el plan {plan.name} no incluye PRs con correcciones")
     fix = s.scalars(select(FixRequest).where(FixRequest.scan_id == scan.id)).first()
     if fix is None:
         fix = FixRequest(scan_id=scan.id, requested_by=requested_by)

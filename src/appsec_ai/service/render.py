@@ -5,8 +5,9 @@ from __future__ import annotations
 from collections import Counter
 
 from appsec_ai.fixes import FileFix, fixable
+from appsec_ai.i18n import localize, ui
 from appsec_ai.models import Finding, ScanResult, Severity
-from appsec_ai.report import CATEGORY_LABEL, SEV_ICON
+from appsec_ai.report import SEV_ICON, category_label
 
 CHECK_NAME = "appsec-ai"
 COMMENT_MARKER = "<!-- appsec-ai:pr-comment -->"
@@ -30,16 +31,17 @@ def conclusion(findings: list[Finding], fail_on: str) -> str:
     return "failure" if any(f.effective_severity.rank >= threshold for f in findings) else "success"
 
 
-def explanation(f: Finding) -> str:
+def explanation(f: Finding, lang: str = "es") -> str:
     if f.triage:
         text = f.triage.explanation
         if f.triage.fix:
-            text += f"\n\nCorrección: {f.triage.fix}"
+            text += f"\n\n{ui(lang, 'fix')}: {f.triage.fix}"
         return text
-    return f.message or f.title
+    title, message = localize(f, lang)
+    return message or title
 
 
-def annotations(findings: list[Finding]) -> list[dict]:
+def annotations(findings: list[Finding], lang: str = "es") -> list[dict]:
     out = []
     for f in findings[:MAX_ANNOTATIONS]:
         if not f.file:
@@ -51,110 +53,108 @@ def annotations(findings: list[Finding]) -> list[dict]:
             "start_line": start,
             "end_line": end,
             "annotation_level": ANNOTATION_LEVEL[f.effective_severity.value],
-            "title": f"[{f.effective_severity.value.upper()}] {f.title}"[:255],
-            "message": explanation(f)[:64000],
+            "title": f"[{f.effective_severity.value.upper()}] {localize(f, lang)[0]}"[:255],
+            "message": explanation(f, lang)[:64000],
             "raw_details": f"{f.engine}/{f.rule_id} · {', '.join(f.frameworks[:4])}"[:64000],
         })
     return out
 
 
-def summary_table(findings: list[Finding]) -> str:
+def summary_table(findings: list[Finding], lang: str = "es") -> str:
     c = counts(findings)
     rows = " | ".join(f"{SEV_ICON[s]} {s}: **{n}**" for s, n in c.items() if n)
-    return rows or "Sin hallazgos 🎉"
+    return rows or ui(lang, "no_findings")
 
 
-def check_output(result: ScanResult, scope_note: str) -> tuple[str, str, str]:
+def check_output(result: ScanResult, full_scan: bool, lang: str = "es") -> tuple[str, str, str]:
     findings = visible(result)
     total = len(findings)
-    title = f"{total} hallazgo{'s' if total != 1 else ''} de seguridad" if total else "Sin hallazgos de seguridad"
-    by_cat = Counter(CATEGORY_LABEL[f.category.value] for f in findings)
+    title = ui(lang, "findings_title", n=total) if total else ui(lang, "no_findings_title")
+    by_cat = Counter(category_label(f.category.value, lang) for f in findings)
     summary = "\n".join([
-        summary_table(findings),
+        summary_table(findings, lang),
         "",
-        scope_note,
+        ui(lang, "scope_full" if full_scan else "scope_pr"),
         "",
         " · ".join(f"{cat}: {n}" for cat, n in by_cat.most_common()) if by_cat else "",
     ]).strip()
     text_parts = []
     if result.ai_summary:
-        text_parts += ["## Resumen de seguridad de IA", "", result.ai_summary, ""]
-    if result.ai_inventory:
-        text_parts += ["## Inventario de IA", "", "| Tipo | Componente | Ubicación |", "|---|---|---|"]
-        text_parts += [f"| {c.kind} | {c.name} | `{c.file}:{c.line}` |" for c in result.ai_inventory[:50]]
+        text_parts += [f"## {ui(lang, 'ai_summary')}", "", result.ai_summary, ""]
+    inventory = [c for c in result.ai_inventory if c.kind != "llm_entrypoint"]
+    if inventory:
+        text_parts += [f"## {ui(lang, 'ai_inventory')}", "",
+                       f"| {ui(lang, 'kind')} | {ui(lang, 'component')} | {ui(lang, 'location')} |", "|---|---|---|"]
+        text_parts += [f"| {c.kind} | {c.name} | `{c.file}:{c.line}` |" for c in inventory[:50]]
     return title, summary, "\n".join(text_parts)
 
 
-def pr_comment(result: ScanResult, details_url: str = "") -> str:
+def pr_comment(result: ScanResult, details_url: str = "", lang: str = "es") -> str:
     findings = visible(result)
-    lines = [COMMENT_MARKER, "### 🛡️ appsec-ai", "", summary_table(findings), ""]
+    lines = [COMMENT_MARKER, "### 🛡️ appsec-ai", "", summary_table(findings, lang), ""]
     if not findings:
-        lines += ["No se han encontrado problemas de seguridad en los ficheros modificados."]
+        lines += [ui(lang, "pr_clean")]
     else:
-        lines += ["| Severidad | Problema | Ubicación |", "|---|---|---|"]
+        lines += [f"| {ui(lang, 'severity')} | {ui(lang, 'problem')} | {ui(lang, 'location')} |", "|---|---|---|"]
         for f in findings[:MAX_COMMENT_FINDINGS]:
             sev = f.effective_severity.value
             loc = f"`{f.file}:{f.line}`" if f.line else f"`{f.file}`"
-            lines.append(f"| {SEV_ICON[sev]} {sev} | {f.title.replace('|', '/')} | {loc} |")
+            lines.append(f"| {SEV_ICON[sev]} {sev} | {localize(f, lang)[0].replace('|', '/')} | {loc} |")
         if len(findings) > MAX_COMMENT_FINDINGS:
-            lines.append(f"\n…y {len(findings) - MAX_COMMENT_FINDINGS} más.")
-        lines += ["", "Cada hallazgo aparece anotado en la pestaña **Files changed** con la explicación y la corrección."]
+            lines.append("\n" + ui(lang, "and_more", n=len(findings) - MAX_COMMENT_FINDINGS))
+        lines += ["", ui(lang, "annotated")]
     if details_url:
-        lines += ["", f"[Ver el informe completo]({details_url})"]
+        lines += ["", f"[{ui(lang, 'full_report')}]({details_url})"]
     if result.suppressed_inline:
-        lines += ["", f"_{result.suppressed_inline} hallazgos silenciados con `appsec-ai: ignore` / `nosec`._"]
+        lines += ["", f"_{ui(lang, 'silenced', n=result.suppressed_inline)}_"]
     return "\n".join(lines)
 
 
 # -- correcciones ---------------------------------------------------------------------------
 
-def fix_actions(result: ScanResult) -> list[dict]:
+def fix_actions(result: ScanResult, lang: str = "es") -> list[dict]:
     """Botón del check para abrir un PR con las correcciones, si hay problemas confirmados por la IA."""
     if not fixable(visible(result)):
         return []
     # GitHub limita la etiqueta a 20 caracteres y la descripción a 40.
-    return [{"label": "Abrir PR con fixes", "description": "Corrige con IA los problemas confirmados",
-             "identifier": "open_fix_pr"}]
+    return [{"label": ui(lang, "fix_label")[:20], "description": ui(lang, "fix_desc")[:40], "identifier": "open_fix_pr"}]
 
 
-def fix_pr_title(fixes: list[FileFix]) -> str:
-    n = sum(len(f.findings) for f in fixes)
-    return f"appsec-ai: corrige {n} problema{'s' if n != 1 else ''} de seguridad"
+def fix_pr_title(fixes: list[FileFix], lang: str = "es") -> str:
+    return ui(lang, "fix_title", n=sum(len(f.findings) for f in fixes))
 
 
-def fix_pr_body(fixes: list[FileFix], skipped: dict[str, str], source: str) -> str:
-    lines = ["### 🛡️ Correcciones de seguridad propuestas por appsec-ai", "",
-             f"Generadas con IA a partir de {source}. **Revísalas antes de fusionar**: comprueba que el "
-             "comportamiento sigue siendo el esperado y que pasan los tests.", ""]
+def fix_source(pr_number: int | None, sha: str, lang: str = "es") -> str:
+    return ui(lang, "fix_source_pr", n=pr_number) if pr_number else ui(lang, "fix_source_commit", sha=sha[:7])
+
+
+def fix_pr_body(fixes: list[FileFix], skipped: dict[str, str], source: str, lang: str = "es") -> str:
+    lines = [f"### 🛡️ {ui(lang, 'fix_heading')}", "", ui(lang, "fix_intro", source=source), ""]
     for fx in fixes:
         lines += [f"#### `{fx.path}`", ""]
         for f in fx.findings:
             sev = f.effective_severity.value
-            lines.append(f"- {SEV_ICON[sev]} **{f.title}** (línea {f.line}, `{f.rule_id}`)")
+            lines.append(f"- {SEV_ICON[sev]} **{localize(f, lang)[0]}** ({ui(lang, 'line')} {f.line}, `{f.rule_id}`)")
         if fx.summary:
             lines += ["", fx.summary]
         lines.append("")
     if skipped:
-        lines += ["#### Sin corrección automática", ""]
+        lines += [f"#### {ui(lang, 'fix_skipped')}", ""]
         lines += [f"- `{path}`: {reason}" for path, reason in skipped.items()]
         lines.append("")
     return "\n".join(lines)
 
 
-def fix_comment(pr_url: str, n_files: int) -> str:
-    return (f"{FIX_MARKER}\n🛠️ He abierto {pr_url} con las correcciones de seguridad para {n_files} "
-            f"fichero{'s' if n_files != 1 else ''}. Revísalo antes de fusionarlo.")
+def fix_comment(pr_url: str, n_files: int, lang: str = "es") -> str:
+    return f"{FIX_MARKER}\n" + ui(lang, "fix_done", url=pr_url, n=n_files)
 
 
-def fix_failed_comment(skipped: dict[str, str]) -> str:
-    lines = [FIX_MARKER, "🛠️ No he podido generar una corrección automática segura:", ""]
+def fix_failed_comment(skipped: dict[str, str], lang: str = "es") -> str:
+    lines = [FIX_MARKER, ui(lang, "fix_failed"), ""]
     lines += [f"- `{path}`: {reason}" for path, reason in skipped.items()]
-    lines += ["", "Las anotaciones del check explican cómo corregir cada problema a mano."]
+    lines += ["", ui(lang, "fix_failed_hint")]
     return "\n".join(lines)
 
 
-FIX_PERMISSION_COMMENT = (
-    f"{FIX_MARKER}\n🛠️ Para abrir PRs con correcciones, appsec-ai necesita permiso de escritura en el contenido "
-    "del repositorio (Contents: Read & write). Un administrador puede concederlo en la configuración de la "
-    "instalación de la GitHub App."
-)
+def fix_permission_comment(lang: str = "es") -> str:
+    return f"{FIX_MARKER}\n" + ui(lang, "fix_permission")

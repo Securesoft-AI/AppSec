@@ -1,0 +1,663 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Atalaya · Panel</title>
+<link rel="icon" href="data:,">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+:root {
+  --paper: #f3f5f4; --surface: #ffffff; --ink: #12232a; --muted: #55666c; --line: #d5dddb;
+  --accent: #0d5f5c; --accent-ink: #ffffff; --accent-soft: #dcebe8; --series: #00917f;
+  --crit: #b4321f; --crit-soft: #fbe6e1; --warn: #9a5b00; --warn-soft: #fbefd9; --code-bg: #f7f9f8;
+  --ok: #1d5b2c; --ok-soft: #e3f3e6;
+  --font-display: "Bricolage Grotesque", "Avenir Next", "Segoe UI", sans-serif;
+  --font-body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+  --radius: 10px;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #0f1719; --surface: #162124; --ink: #e4ecea; --muted: #94a6a5; --line: #29393c;
+    --accent: #5cc0b5; --accent-ink: #062321; --accent-soft: #173a38; --series: #35cbbd;
+    --crit: #ff8a72; --crit-soft: #3a1c17; --warn: #f2b25c; --warn-soft: #382a14; --code-bg: #121c1e;
+    --ok: #9be0ad; --ok-soft: #15301d;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --paper: #0f1719; --surface: #162124; --ink: #e4ecea; --muted: #94a6a5; --line: #29393c;
+  --accent: #5cc0b5; --accent-ink: #062321; --accent-soft: #173a38; --series: #35cbbd;
+  --crit: #ff8a72; --crit-soft: #3a1c17; --warn: #f2b25c; --warn-soft: #382a14; --code-bg: #121c1e;
+  --ok: #9be0ad; --ok-soft: #15301d;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--paper); color: var(--ink); font: 15px/1.55 var(--font-body); }
+h1, h2, h3 { font-family: var(--font-display); margin: 0; letter-spacing: -0.01em; line-height: 1.15; }
+h1 { font-size: 1.5rem; } h2 { font-size: 1.1rem; margin-bottom: 12px; } h3 { font-size: 1rem; }
+code, .mono { font-family: var(--font-mono); font-size: 0.9em; }
+a { color: var(--accent); }
+button, select, input, textarea { font: inherit; color: inherit; }
+.wrap { max-width: 1180px; margin: 0 auto; padding: 0 16px; }
+header { border-bottom: 1px solid var(--line); background: var(--surface); }
+header .wrap { display: flex; align-items: center; gap: 12px; padding-block: 12px; flex-wrap: wrap; }
+.brand { font-family: var(--font-display); font-weight: 800; font-size: 1.2rem; margin-right: auto; }
+.inline { display: flex; flex-direction: row; align-items: center; gap: 6px; }
+nav.tabs { border-bottom: 1px solid var(--line); background: var(--surface); }
+nav.tabs .wrap { display: flex; gap: 2px; overflow-x: auto; scrollbar-width: none; }
+nav.tabs button { border: 0; background: none; padding: 10px 12px; cursor: pointer; color: var(--muted);
+                  border-bottom: 2px solid transparent; white-space: nowrap; }
+nav.tabs button[aria-current="page"] { color: var(--ink); border-bottom-color: var(--accent); font-weight: 600; }
+.btn { text-decoration: none; display: inline-block; border: 1px solid var(--line); background: var(--surface);
+       border-radius: 8px; padding: 6px 12px; cursor: pointer; }
+.btn:hover { border-color: var(--accent); }
+.btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.btn[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+select, input, textarea { border: 1px solid var(--line); background: var(--surface); border-radius: 8px; padding: 6px 8px; max-width: 100%; }
+textarea { width: 100%; min-height: 80px; }
+label { display: grid; gap: 4px; font-size: 0.9rem; }
+main.wrap { padding-block: 24px 48px; display: grid; gap: 20px; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px; min-width: 0; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; }
+.tile { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; }
+.tile .k { color: var(--muted); font-size: 0.85rem; display: flex; gap: 6px; align-items: center; }
+.tile .v { font-family: var(--font-display); font-size: 2rem; font-weight: 800; line-height: 1.1; margin-top: 4px; }
+.services { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 12px; }
+.service { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px;
+           display: grid; gap: 8px; align-content: start; text-align: left; }
+button.service { cursor: pointer; }
+button.service:hover { border-color: var(--accent); }
+.service .head { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+.service .count { font-family: var(--font-display); font-size: 1.6rem; font-weight: 800; }
+.service .sevs { display: flex; gap: 10px; flex-wrap: wrap; font-size: 0.82rem; }
+.service p { margin: 0; }
+.pill { display: inline-block; font-size: 0.75rem; font-weight: 600; padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
+.pill.on { background: var(--ok-soft); color: var(--ok); }
+.pill.off { background: var(--code-bg); color: var(--muted); border: 1px solid var(--line); }
+.pill.trial { background: var(--accent-soft); color: var(--accent); }
+.sev { display: inline-flex; align-items: center; gap: 6px; font-size: 0.82rem; font-weight: 600; white-space: nowrap; }
+.sev::before { content: ""; width: 9px; height: 9px; border-radius: 2px; background: currentColor; }
+.sev-critical, .sev-high { color: var(--crit); } .sev-medium { color: var(--warn); } .sev-low, .sev-info { color: var(--muted); }
+table { width: 100%; border-collapse: collapse; font-size: 0.92rem; }
+th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { color: var(--muted); font-weight: 500; font-size: 0.82rem; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+.scroll { overflow-x: auto; }
+tr.link { cursor: pointer; } tr.link:hover td { background: var(--accent-soft); }
+.muted { color: var(--muted); }
+.chart { position: relative; min-height: 220px; }
+.chart svg { display: block; width: 100%; height: 220px; overflow: visible; }
+.chart .grid line { stroke: var(--line); stroke-width: 1; }
+.chart .axis text { fill: var(--muted); font-size: 11px; font-family: var(--font-body); }
+.chart .line { fill: none; stroke: var(--series); stroke-width: 2; stroke-linejoin: round; }
+.chart .area { fill: var(--series); opacity: 0.12; }
+.chart .cross { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 3 3; }
+.chart .dot { fill: var(--series); stroke: var(--surface); stroke-width: 2; }
+.tip { position: absolute; pointer-events: none; background: var(--surface); border: 1px solid var(--line); border-radius: 8px;
+       padding: 8px 10px; font-size: 0.82rem; box-shadow: 0 4px 16px rgb(0 0 0 / 0.12); min-width: 150px; }
+.tip b { display: block; margin-bottom: 4px; }
+.tip .row { display: flex; justify-content: space-between; gap: 12px; }
+.finding { border-top: 1px solid var(--line); padding: 14px 0; }
+.finding:first-child { border-top: 0; }
+.finding h3 { font-family: var(--font-body); font-size: 1rem; font-weight: 600; margin: 4px 0; }
+.finding pre { background: var(--code-bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px; overflow-x: auto; font-size: 0.82rem; margin: 8px 0; }
+.meta { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; color: var(--muted); font-size: 0.85rem; }
+.vote { display: flex; gap: 6px; margin-top: 8px; align-items: center; flex-wrap: wrap; }
+.empty { text-align: center; padding: 48px 16px; }
+.toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
+.toolbar h2 { margin: 0 auto 0 0; }
+.notice { padding: 10px 12px; border-radius: 8px; background: var(--warn-soft); color: var(--ink); margin: 0 0 12px; }
+.notice.ok { background: var(--ok-soft); }
+.checks { display: flex; gap: 8px 16px; flex-wrap: wrap; margin: 8px 0 12px; }
+.checks label { display: inline-flex; gap: 6px; align-items: center; }
+.form { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+.form .full { grid-column: 1 / -1; }
+.login { max-width: 420px; margin: 0 auto; display: grid; gap: 14px; }
+.login-form { display: grid; gap: 14px; }
+.or { text-align: center; color: var(--muted); font-size: 0.85rem; margin: 0; }
+.price { font-family: var(--font-display); font-size: 1.4rem; font-weight: 800; }
+.price s { color: var(--muted); font-size: 0.9rem; font-weight: 400; margin-left: 6px; }
+.status { font-weight: 600; color: var(--ink); }
+[hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap">
+    <span class="brand">Atalaya</span>
+    <select id="inst" aria-label="Organización" hidden></select>
+    <label class="muted inline" id="gh-lang-wrap" hidden>
+      <span data-i18n="gh_lang">Idioma en GitHub</span>
+      <select id="gh-lang"><option value="es">Español</option><option value="en">English</option></select></label>
+    <button class="btn" id="lang" type="button">EN</button>
+    <button class="btn" id="logout" type="button" hidden data-i18n="logout">Salir</button>
+  </div>
+</header>
+<nav class="tabs" id="tabs" hidden><div class="wrap" id="tab-list"></div></nav>
+
+<main class="wrap" id="main"></main>
+
+<script>
+"use strict";
+const SEVERITIES = ["critical", "high", "medium", "low", "info"];
+const SCAN_SERVICES = ["sast", "sca", "secrets", "iac", "ai"];
+const I18N = {
+  es: {
+    logout: "Salir", gh_lang: "Idioma en GitHub",
+    login_title: "Entra en Atalaya", login_github: "Entrar con GitHub", login_user: "Usuario", login_pass: "Contraseña",
+    login_demo: "Entrar (demo)", login_or: "o", login_bad: "Usuario o contraseña incorrectos.",
+    login_demo_hint: "Modo demostración: usuario «user», contraseña «pass».", login_none: "No hay ninguna forma de entrar configurada.",
+    tab_overview: "Resumen", tab_pentest: "Pentest", tab_plan: "Servicios y plan",
+    critical: "Crítico", high: "Alto", medium: "Medio", low: "Bajo", info: "Info", total: "Total",
+    trend_title: "Hallazgos abiertos · últimos 30 días", as_table: "Ver como tabla", date: "Fecha",
+    all_services: "Todos los servicios", open_findings: "hallazgos abiertos", contracted: "Contratado", trial: "En prueba",
+    not_contracted: "No contratado", free_included: "Incluido en Free",
+    repos: "Repositorios", repo: "Repositorio", last_scan: "Último escaneo",
+    ai_inventory: "Inventario de IA", kind: "Tipo", component: "Componente", where: "Ubicación",
+    no_findings: "Sin hallazgos abiertos.", no_installs: "Ninguna organización con la App instalada a la que tengas acceso.",
+    useful: "Útil", not_useful: "No útil", thanks: "Gracias, lo usaremos para mejorar.", verdict: "Veredicto IA",
+    fix_pr: "Abrir PR con fixes", pdf: "Descargar PDF", back: "Volver",
+    fix_requested: "Corrección en cola. Aparecerá un PR en el repositorio.", error: "No se pudo completar: ",
+    repo_services: "Servicios en este repositorio", repo_services_hint: "Se aplican en cada PR y push, y al escanear ahora. Solo puedes elegir servicios contratados.",
+    save: "Guardar", saved: "Guardado.", scan_now: "Escanear ahora", scanning: "Escaneando…", findings_title: "Hallazgos abiertos",
+    scan_queued: "Escaneo en cola. Los resultados aparecerán aquí en unos minutos.", scan_done: "Escaneo terminado.",
+    filter_all: "Todas las áreas", full: "completo", pull_request: "PR", manual: "manual", none: "—",
+    service_findings: "Hallazgos de {s} en todos los repositorios", hire: "Contratar",
+    pentest_title: "Pentest con nuestro equipo", p_kind: "Tipo", p_target: "Objetivo (URL, app o rango)",
+    p_scope: "Alcance y objetivos", p_dates: "Fechas preferidas", p_email: "Email de contacto", p_send: "Solicitar pentest",
+    p_sent: "Solicitud enviada. Te contactaremos para concretar alcance y presupuesto.",
+    p_list: "Tus pentests", p_none: "Todavía no has solicitado ningún pentest.", p_quote: "Presupuesto", p_report: "Informe",
+    k_web: "Aplicación web", k_api: "API", k_mobile: "App móvil", k_llm: "Aplicación con IA / LLM", k_network: "Red / infraestructura",
+    s_requested: "Solicitado", s_scoping: "Definiendo alcance", s_scheduled: "Programado", s_in_progress: "En curso",
+    s_reported: "Informe entregado", s_cancelled: "Cancelado",
+    plan_title: "Tus servicios", plan_trial: "Prueba gratuita: {n} días con todos los servicios.",
+    plan_free: "Plan Free: Secretos y Dependencias, 1 repositorio, escaneo semanal.", plan_paid: "Servicios contratados",
+    ai_left: "{n} peticiones de IA este mes", per_month: "€/mes", from: "desde {p} € por proyecto",
+    bundles: "Paquetes", save_pct: "ahorras {p} € al mes", choose: "Servicios", checkout: "Contratar selección",
+    manage: "Gestionar facturación", billing_off: "La facturación aún no está activada en este servicio.",
+    billing_ok: "Pago recibido. Los servicios se activan en unos segundos.", request_pentest: "Solicitar pentest",
+    includes: "Incluye", ai_extra: "Cualquier servicio de pago incluye triage con IA, PRs con correcciones e informe PDF.",
+  },
+  en: {
+    logout: "Sign out", gh_lang: "GitHub language",
+    login_title: "Sign in to Atalaya", login_github: "Sign in with GitHub", login_user: "User", login_pass: "Password",
+    login_demo: "Sign in (demo)", login_or: "or", login_bad: "Wrong user or password.",
+    login_demo_hint: "Demo mode: user “user”, password “pass”.", login_none: "No sign-in method is configured.",
+    tab_overview: "Overview", tab_pentest: "Pentest", tab_plan: "Services & plan",
+    critical: "Critical", high: "High", medium: "Medium", low: "Low", info: "Info", total: "Total",
+    trend_title: "Open findings · last 30 days", as_table: "View as table", date: "Date",
+    all_services: "All services", open_findings: "open findings", contracted: "Subscribed", trial: "On trial",
+    not_contracted: "Not subscribed", free_included: "Included in Free",
+    repos: "Repositories", repo: "Repository", last_scan: "Last scan",
+    ai_inventory: "AI inventory", kind: "Type", component: "Component", where: "Location",
+    no_findings: "No open findings.", no_installs: "No organizations with the App installed that you can access.",
+    useful: "Useful", not_useful: "Not useful", thanks: "Thanks, we'll use it to improve.", verdict: "AI verdict",
+    fix_pr: "Open fix PR", pdf: "Download PDF", back: "Back",
+    fix_requested: "Fix queued. A PR will appear in the repository.", error: "Couldn't complete: ",
+    repo_services: "Services on this repository", repo_services_hint: "Applied on every PR and push, and when you scan now. Only subscribed services can be chosen.",
+    save: "Save", saved: "Saved.", scan_now: "Scan now", scanning: "Scanning…", findings_title: "Open findings",
+    scan_queued: "Scan queued. Results will show up here in a few minutes.", scan_done: "Scan finished.",
+    filter_all: "All areas", full: "full", pull_request: "PR", manual: "manual", none: "—",
+    service_findings: "{s} findings across all repositories", hire: "Subscribe",
+    pentest_title: "Pentest with our team", p_kind: "Type", p_target: "Target (URL, app or range)",
+    p_scope: "Scope and goals", p_dates: "Preferred dates", p_email: "Contact email", p_send: "Request pentest",
+    p_sent: "Request sent. We'll contact you to agree scope and a quote.",
+    p_list: "Your pentests", p_none: "You haven't requested a pentest yet.", p_quote: "Quote", p_report: "Report",
+    k_web: "Web application", k_api: "API", k_mobile: "Mobile app", k_llm: "AI / LLM application", k_network: "Network / infrastructure",
+    s_requested: "Requested", s_scoping: "Scoping", s_scheduled: "Scheduled", s_in_progress: "In progress",
+    s_reported: "Report delivered", s_cancelled: "Cancelled",
+    plan_title: "Your services", plan_trial: "Free trial: {n} days with every service.",
+    plan_free: "Free plan: Secrets and Dependencies, 1 repository, weekly scan.", plan_paid: "Subscribed services",
+    ai_left: "{n} AI requests this month", per_month: "€/mo", from: "from €{p} per project",
+    bundles: "Bundles", save_pct: "save €{p} a month", choose: "Services", checkout: "Subscribe to selection",
+    manage: "Manage billing", billing_off: "Billing is not enabled on this service yet.",
+    billing_ok: "Payment received. Services activate in a few seconds.", request_pentest: "Request pentest",
+    includes: "Includes", ai_extra: "Every paid service includes AI triage, fix PRs and the PDF report.",
+  },
+};
+let lang = (() => { try { return localStorage.getItem("lang") || (navigator.language || "es").slice(0, 2); } catch { return "es"; } })();
+if (!I18N[lang]) lang = "es";
+const t = (k, vars = {}) => (I18N[lang][k] ?? k).replace(/\{(\w+)\}/g, (_, v) => vars[v] ?? "");
+const $ = (id) => document.getElementById(id);
+
+// El DOM se construye con nodos de texto, nunca interpretando HTML: títulos, rutas y fragmentos vienen
+// del código del cliente.
+function el(tag, attrs = {}, ...children) {
+  const n = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (v === false || v == null) continue;
+    if (k === "class") n.className = v; else if (k.startsWith("on")) n.addEventListener(k.slice(2), v);
+    else if (v === true) n.setAttribute(k, ""); else n.setAttribute(k, v);
+  }
+  for (const c of children.flat()) if (c !== "" && c != null) n.append(c instanceof Node ? c : document.createTextNode(String(c)));
+  return n;
+}
+const sevLabel = (s) => el("span", { class: `sev sev-${s}` }, t(s));
+
+async function api(path, opts = {}) {
+  const r = await fetch(path, { credentials: "same-origin", ...opts,
+    headers: { "Content-Type": "application/json", ...(opts.headers || {}) } });
+  if (r.status === 401) { showLogin(); throw new Error("401"); }
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.status);
+  return r.json();
+}
+
+// -- estado -----------------------------------------------------------------------------------
+const state = { me: null, catalog: null, dash: null, billing: null, view: "overview", param: null, scans: {} };
+const svc = (key) => state.catalog.services.find((s) => s.key === key);
+const instId = () => $("inst").value;
+const entitled = (key) => state.billing.services.includes(key);
+const shortName = (k) => ({ sast: "SAST", sca: "SCA", secrets: lang === "en" ? "Secrets" : "Secretos", iac: "IaC", ai: lang === "en" ? "AI" : "IA" }[k] || k);
+
+function applyLang() {
+  document.documentElement.lang = lang;
+  document.querySelectorAll("[data-i18n]").forEach((n) => { n.textContent = t(n.dataset.i18n); });
+  $("lang").textContent = lang === "es" ? "EN" : "ES";
+}
+
+// -- login: GitHub y/o demo (user / pass) --------------------------------------------------------
+async function showLogin() {
+  state.me = null;
+  for (const id of ["logout", "inst", "gh-lang-wrap", "tabs"]) $(id).hidden = true;
+  const cfg = await fetch("/auth/config").then((r) => r.json()).catch(() => ({ github: false, demo: false }));
+  const msg = el("p", { class: "notice", hidden: true });
+  const user = el("input", { autocomplete: "username", name: "username", required: true });
+  const pass = el("input", { type: "password", autocomplete: "current-password", name: "password", required: true });
+  const form = el("form", { class: "login-form", onsubmit: async (e) => {
+      e.preventDefault();
+      const r = await fetch("/auth/demo", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: user.value, password: pass.value }) });
+      if (r.ok) boot(); else { msg.textContent = t("login_bad"); msg.hidden = false; }
+    } },
+    el("label", {}, t("login_user"), user), el("label", {}, t("login_pass"), pass),
+    el("button", { class: "btn primary", type: "submit" }, t("login_demo")),
+    el("p", { class: "muted" }, t("login_demo_hint")));
+  $("main").replaceChildren(el("section", { class: "card" }, el("div", { class: "login" },
+    el("h1", {}, t("login_title")), msg,
+    cfg.github ? el("a", { class: "btn primary", href: "/auth/login" }, t("login_github")) : "",
+    cfg.github && cfg.demo ? el("p", { class: "or" }, t("login_or")) : "",
+    cfg.demo ? form : "",
+    !cfg.github && !cfg.demo ? el("p", { class: "muted" }, t("login_none")) : "")));
+}
+
+// -- arranque y navegación ---------------------------------------------------------------------
+async function boot() {
+  applyLang();
+  try { state.me = await api("/api/me"); } catch { return; }
+  state.catalog = await api(`/api/catalog?lang=${lang}`);
+  $("logout").hidden = false;
+  const sel = $("inst");
+  sel.replaceChildren(...state.me.installations.map((i) => el("option", { value: i.id }, i.account)));
+  if (!state.me.installations.length) {
+    $("main").replaceChildren(el("section", { class: "card empty" }, el("p", {}, t("no_installs"))));
+    return;
+  }
+  sel.hidden = state.me.installations.length < 2;
+  let saved; try { saved = localStorage.getItem("inst"); } catch {}
+  if (saved && state.me.installations.some((i) => String(i.id) === saved)) sel.value = saved;
+  if (new URLSearchParams(location.search).get("billing")) state.view = "plan";
+  await loadInstallation();
+}
+
+async function loadInstallation(view = null, param = null) {
+  try { localStorage.setItem("inst", instId()); } catch {}
+  const inst = state.me.installations.find((i) => String(i.id) === instId());
+  $("gh-lang").value = inst ? inst.language : "es";
+  $("gh-lang-wrap").hidden = false;
+  [state.dash, state.billing] = await Promise.all([
+    api(`/api/installations/${encodeURIComponent(instId())}/dashboard`),
+    api(`/api/installations/${encodeURIComponent(instId())}/billing`)]);
+  state.scans = {};
+  renderTabs();
+  if (view) go(view, param); else go(state.view === "repo" ? "overview" : state.view, state.view === "repo" ? null : state.param);
+}
+
+function renderTabs() {
+  $("tabs").hidden = false;
+  const tabs = [["overview", t("tab_overview")], ...SCAN_SERVICES.map((k) => ["service:" + k, shortName(k)]),
+                ["pentest", t("tab_pentest")], ["plan", t("tab_plan")]];
+  $("tab-list").replaceChildren(...tabs.map(([id, label]) => el("button", { type: "button", "data-view": id,
+    onclick: () => { const [v, p] = id.split(":"); go(v, p || null); } }, label)));
+}
+
+function go(view, param = null) {
+  state.view = view; state.param = param;
+  const id = param && view === "service" ? `service:${param}` : view;
+  document.querySelectorAll("#tab-list button").forEach((b) => b.setAttribute("aria-current", b.dataset.view === id ? "page" : "false"));
+  ({ overview: viewOverview, service: viewService, repo: viewRepo, pentest: viewPentest, plan: viewPlan })[view](param);
+  window.scrollTo({ top: 0 });
+}
+
+function statusPill(key) {
+  const b = state.billing;
+  if (!b.services.includes(key)) return el("span", { class: "pill off" }, t("not_contracted"));
+  if (b.plan === "trial") return el("span", { class: "pill trial" }, t("trial"));
+  if (b.plan === "free") return el("span", { class: "pill on" }, t("free_included"));
+  return el("span", { class: "pill on" }, t("contracted"));
+}
+
+// -- resumen unificado --------------------------------------------------------------------------
+function viewOverview() {
+  const d = state.dash;
+  const total = SEVERITIES.reduce((a, s) => a + d.by_severity[s], 0);
+  const tiles = el("div", { class: "tiles" },
+    el("div", { class: "tile" }, el("div", { class: "k" }, t("total")), el("div", { class: "v" }, total)),
+    ...SEVERITIES.slice(0, 4).map((s) => el("div", { class: "tile" }, el("div", { class: "k" }, sevLabel(s)), el("div", { class: "v" }, d.by_severity[s]))));
+
+  const cards = el("div", { class: "services" }, ...state.catalog.services.map((s) => {
+    if (!s.scan) {
+      return el("button", { class: "service", type: "button", onclick: () => go("pentest") },
+        el("div", { class: "head" }, el("h3", {}, s.name), el("span", { class: "pill off" }, t("from", { p: s.price_from_eur }))),
+        el("p", { class: "muted" }, s.summary));
+    }
+    const sev = d.by_service[s.key] || {};
+    const n = SEVERITIES.reduce((a, x) => a + (sev[x] || 0), 0);
+    return el("button", { class: "service", type: "button", onclick: () => go("service", s.key) },
+      el("div", { class: "head" }, el("h3", {}, s.name), statusPill(s.key)),
+      el("div", {}, el("span", { class: "count" }, n), " ", el("span", { class: "muted" }, t("open_findings"))),
+      el("div", { class: "sevs" }, ...SEVERITIES.filter((x) => sev[x]).map((x) => el("span", {}, sevLabel(x), " ", sev[x]))));
+  }));
+
+  const trendCard = el("section", { class: "card" }, el("h2", {}, t("trend_title")), el("div", { class: "chart", id: "trend" }),
+    el("details", {}, el("summary", { class: "muted" }, t("as_table")), el("div", { class: "scroll", id: "trend-table" })));
+
+  $("main").replaceChildren(tiles, el("section", {}, el("h2", {}, t("all_services")), cards), trendCard, reposCard(),
+    inventoryCard(d.ai_inventory));
+  renderTrend(d.trend);
+}
+
+function reposCard() {
+  const d = state.dash;
+  const scanned = new Map(d.repositories.map((r) => [r.id, r]));
+  const rows = d.all_repositories.map((repo) => {
+    const r = scanned.get(repo.id);
+    return el("tr", { class: "link", tabindex: "0", onclick: () => go("repo", repo.id), onkeydown: (e) => { if (e.key === "Enter") go("repo", repo.id); } },
+      el("td", { class: "mono" }, repo.full_name),
+      ...SCAN_SERVICES.map((k) => el("td", { class: "num" }, r ? (r.by_category[k] || 0) : t("none"))),
+      el("td", { class: "num" }, r ? r.total : t("none")),
+      el("td", { class: "muted" }, r && r.finished_at ? new Date(r.finished_at).toLocaleDateString(lang) + " · " + t(r.kind) : t("none")));
+  });
+  return el("section", { class: "card" }, el("h2", {}, t("repos")),
+    el("div", { class: "scroll" }, el("table", {},
+      el("tr", {}, el("th", {}, t("repo")), ...SCAN_SERVICES.map((k) => el("th", { class: "num" }, shortName(k))),
+         el("th", { class: "num" }, t("total")), el("th", {}, t("last_scan"))), ...rows)));
+}
+
+function inventoryCard(items) {
+  if (!items.length) return "";
+  return el("section", { class: "card" }, el("h2", {}, t("ai_inventory")), el("div", { class: "scroll" }, el("table", {},
+    el("tr", {}, el("th", {}, t("kind")), el("th", {}, t("component")), el("th", {}, t("where"))),
+    ...items.map((c) => el("tr", {}, el("td", {}, c.kind), el("td", {}, c.name), el("td", { class: "mono" }, `${c.repository}/${c.file}:${c.line}`))))));
+}
+
+// -- vista por servicio --------------------------------------------------------------------------
+async function scanOf(scanId) {
+  if (!state.scans[scanId]) state.scans[scanId] = await api(`/api/scans/${scanId}?lang=${lang}`);
+  return state.scans[scanId];
+}
+
+async function viewService(key) {
+  const s = svc(key);
+  const list = el("section", { class: "card" }, el("h2", {}, t("service_findings", { s: s.name })), el("p", { class: "muted" }, "…"));
+  $("main").replaceChildren(
+    el("section", { class: "card" },
+      el("div", { class: "toolbar" }, el("h2", {}, s.name), statusPill(key)),
+      el("p", {}, s.summary),
+      entitled(key) ? "" : el("p", {}, el("button", { class: "btn primary", type: "button", onclick: () => go("plan") },
+        `${t("hire")} · ${s.price_month_eur} ${t("per_month")}`))),
+    list, key === "ai" ? inventoryCard(state.dash.ai_inventory) : "");
+  const blocks = [];
+  for (const r of state.dash.repositories) {
+    if (!r.by_category[key]) continue;
+    const scan = await scanOf(r.scan_id);
+    const findings = (scan.result?.findings || []).filter((f) => f.category === key && !(f.triage && f.triage.verdict === "false_positive"));
+    if (findings.length) blocks.push(el("h3", { class: "mono" }, r.full_name),
+                                     ...findings.map((f) => renderFinding(r.scan_id, f, scan.feedback || {})));
+  }
+  if (state.view !== "service" || state.param !== key) return;  // el usuario ya cambió de vista
+  list.replaceChildren(el("h2", {}, t("service_findings", { s: s.name })), ...(blocks.length ? blocks : [el("p", { class: "muted" }, t("no_findings"))]));
+}
+
+// -- repositorio: servicios elegidos, escanear ahora y hallazgos --------------------------------------
+async function viewRepo(repoId) {
+  const repo = state.dash.all_repositories.find((r) => r.id === repoId);
+  const row = state.dash.repositories.find((r) => r.id === repoId);
+  const msg = el("p", { class: "notice ok", hidden: true });
+  const say = (text, ok = true) => { msg.textContent = text; msg.className = ok ? "notice ok" : "notice"; msg.hidden = false; };
+
+  const chosen = new Set(repo.services || state.billing.services);
+  const inputs = SCAN_SERVICES.map((k) => el("input", { type: "checkbox", value: k, checked: chosen.has(k) && entitled(k), disabled: !entitled(k) }));
+  const picked = () => inputs.filter((i) => i.checked).map((i) => i.value);
+  const saveBtn = el("button", { class: "btn", type: "button", onclick: async () => {
+    try {
+      const r = await api(`/api/repositories/${repoId}/services`, { method: "PATCH", body: JSON.stringify({ services: picked().length ? picked() : null }) });
+      repo.services = r.services; say(t("saved"));
+    } catch (e) { say(t("error") + e.message, false); }
+  } }, t("save"));
+  const scanBtn = el("button", { class: "btn primary", type: "button", onclick: async () => {
+    scanBtn.disabled = true; scanBtn.textContent = t("scanning");
+    try {
+      const r = await api(`/api/repositories/${repoId}/scans`, { method: "POST", body: JSON.stringify({ services: picked().length ? picked() : null }) });
+      if (r.status === "completed") { await loadInstallation("repo", repoId); return; }
+      say(t("scan_queued"));
+    } catch (e) { say(t("error") + e.message, false); }
+    scanBtn.disabled = false; scanBtn.textContent = t("scan_now");
+  } }, t("scan_now"));
+
+  const filter = el("select", { "aria-label": t("filter_all") }, el("option", { value: "" }, t("filter_all")),
+    ...SCAN_SERVICES.map((k) => el("option", { value: k }, svc(k).name)));
+  const list = el("div", {});
+  $("main").replaceChildren(
+    el("section", { class: "card" },
+      el("div", { class: "toolbar" }, el("h2", { class: "mono" }, repo.full_name),
+        row && state.billing.limits.pdf_report ? el("a", { class: "btn", href: `/api/scans/${row.scan_id}/report.pdf?lang=${lang}` }, t("pdf")) : "",
+        row && state.billing.limits.fix_pr ? el("button", { class: "btn", type: "button", onclick: async () => {
+          try { await api(`/api/scans/${row.scan_id}/fix-pr`, { method: "POST" }); say(t("fix_requested")); } catch (e) { say(t("error") + e.message, false); }
+        } }, t("fix_pr")) : "",
+        el("button", { class: "btn", type: "button", onclick: () => go("overview") }, t("back"))),
+      msg, el("h3", {}, t("repo_services")), el("p", { class: "muted" }, t("repo_services_hint")),
+      el("div", { class: "checks" }, ...inputs.map((i) => el("label", {}, i, svc(i.value).name))),
+      el("div", { class: "toolbar" }, saveBtn, scanBtn)),
+    el("section", { class: "card" }, el("div", { class: "toolbar" }, el("h2", {}, t("findings_title")), filter), list));
+  if (!row) { list.replaceChildren(el("p", { class: "muted" }, t("no_findings"))); return; }
+  const scan = await scanOf(row.scan_id);
+  const all = (scan.result?.findings || []).filter((f) => !(f.triage && f.triage.verdict === "false_positive"));
+  const draw = () => {
+    const shown = all.filter((f) => !filter.value || f.category === filter.value);
+    list.replaceChildren(...(shown.length ? shown.map((f) => renderFinding(row.scan_id, f, scan.feedback || {})) : [el("p", { class: "muted" }, t("no_findings"))]));
+  };
+  filter.addEventListener("change", draw);
+  draw();
+}
+
+function renderFinding(scanId, f, feedback) {
+  const sev = f.triage ? f.triage.severity : f.severity;
+  const fp = f.fingerprint;
+  const vote = (useful) => async (evt) => {
+    await api(`/api/scans/${scanId}/feedback`, { method: "POST", body: JSON.stringify({ fingerprint: fp, useful }) });
+    const row = evt.target.parentElement;
+    row.querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", String(b === evt.target)));
+    row.lastChild.textContent = t("thanks");
+    feedback[fp] = useful;
+  };
+  return el("article", { class: "finding" },
+    el("div", { class: "meta" }, sevLabel(sev), el("span", { class: "pill off" }, shortName(f.category)),
+       el("span", { class: "mono" }, `${f.file}:${f.line}`), el("span", {}, f.rule_id),
+       f.triage ? el("span", {}, `${t("verdict")}: ${f.triage.verdict} (${Math.round(f.triage.confidence * 100)}%)`) : ""),
+    el("h3", {}, f.title),
+    el("p", {}, f.triage ? f.triage.explanation : f.message),
+    f.triage && f.triage.fix ? el("p", {}, el("b", {}, "→ "), f.triage.fix) : "",
+    f.snippet ? el("pre", {}, f.snippet) : "",
+    el("div", { class: "vote" },
+      el("button", { class: "btn", type: "button", "aria-pressed": String(feedback[fp] === true), onclick: vote(true) }, "👍 " + t("useful")),
+      el("button", { class: "btn", type: "button", "aria-pressed": String(feedback[fp] === false), onclick: vote(false) }, "👎 " + t("not_useful")),
+      el("span", { class: "muted" }, "")));
+}
+
+// -- pentest -----------------------------------------------------------------------------------
+async function viewPentest() {
+  const s = svc("pentest");
+  const msg = el("p", { class: "notice ok", hidden: true });
+  const f = {
+    kind: el("select", {}, ...["web", "api", "mobile", "llm", "network"].map((k) => el("option", { value: k }, t("k_" + k)))),
+    target: el("input", { required: true, minlength: 3, maxlength: 500 }),
+    scope: el("textarea", { maxlength: 5000 }), preferred_dates: el("input", { maxlength: 200 }),
+    contact_email: el("input", { type: "email", required: true, maxlength: 320 }),
+  };
+  const list = el("div", {});
+  const form = el("form", { class: "form", onsubmit: async (e) => {
+      e.preventDefault();
+      try {
+        await api(`/api/installations/${encodeURIComponent(instId())}/pentests`, { method: "POST",
+          body: JSON.stringify(Object.fromEntries(Object.entries(f).map(([k, n]) => [k, n.value]))) });
+        msg.textContent = t("p_sent"); msg.className = "notice ok"; msg.hidden = false; form.reset(); loadList();
+      } catch (err) { msg.textContent = t("error") + err.message; msg.className = "notice"; msg.hidden = false; }
+    } },
+    el("label", {}, t("p_kind"), f.kind), el("label", {}, t("p_target"), f.target),
+    el("label", { class: "full" }, t("p_scope"), f.scope), el("label", {}, t("p_dates"), f.preferred_dates),
+    el("label", {}, t("p_email"), f.contact_email),
+    el("div", { class: "full" }, el("button", { class: "btn primary", type: "submit" }, t("p_send"))));
+  $("main").replaceChildren(
+    el("section", { class: "card" }, el("div", { class: "toolbar" }, el("h2", {}, t("pentest_title")),
+      el("span", { class: "pill off" }, t("from", { p: s.price_from_eur }))), el("p", {}, s.summary), msg, form),
+    el("section", { class: "card" }, el("h2", {}, t("p_list")), list));
+  async function loadList() {
+    const items = await api(`/api/installations/${encodeURIComponent(instId())}/pentests`);
+    list.replaceChildren(...(items.length ? items.map((p) => el("article", { class: "finding" },
+      el("div", { class: "meta" }, el("span", { class: "status" }, t("s_" + p.status)), el("span", {}, t("k_" + p.kind)),
+         el("span", {}, new Date(p.created_at).toLocaleDateString(lang)), p.quote_eur ? el("span", {}, `${t("p_quote")}: ${p.quote_eur} €`) : ""),
+      el("h3", { class: "mono" }, p.target), p.scope ? el("p", {}, p.scope) : "",
+      p.report && p.report.summary ? el("div", {}, el("h3", {}, t("p_report")), el("p", {}, p.report.summary),
+        ...(p.report.findings || []).map((x) => el("div", { class: "meta" }, sevLabel(SEVERITIES.includes(x.severity) ? x.severity : "info"), el("span", {}, x.title || "")))) : ""))
+      : [el("p", { class: "muted" }, t("p_none"))]));
+  }
+  loadList();
+}
+
+// -- servicios y plan ----------------------------------------------------------------------------
+function viewPlan() {
+  const b = state.billing, cat = state.catalog;
+  const msg = el("p", { class: "notice ok", hidden: true });
+  if (new URLSearchParams(location.search).get("billing") === "ok") { msg.textContent = t("billing_ok"); msg.hidden = false; }
+  const status = b.plan === "trial" ? t("plan_trial", { n: b.trial_days_left })
+    : b.plan === "free" ? t("plan_free") : `${t("plan_paid")}: ${b.services.map(shortName).join(", ")}`;
+  const picked = new Set();
+  const checkoutBtn = el("button", { class: "btn primary", type: "button", disabled: true, onclick: async () => {
+    try { const r = await api(`/api/installations/${encodeURIComponent(instId())}/billing/checkout`, { method: "POST", body: JSON.stringify({ items: [...picked] }) }); location.href = r.url; }
+    catch (e) { msg.textContent = t("error") + e.message; msg.className = "notice"; msg.hidden = false; }
+  } }, t("checkout"));
+  const pick = (key) => el("label", { class: "inline" }, el("input", { type: "checkbox", disabled: !b.billing_enabled, onchange: (e) => {
+    if (e.target.checked) picked.add(key); else picked.delete(key);
+    checkoutBtn.disabled = !picked.size;
+  } }), t("hire"));
+  const services = el("div", { class: "services" }, ...cat.services.map((s) => el("div", { class: "service" },
+    el("div", { class: "head" }, el("h3", {}, s.name), s.scan ? statusPill(s.key) : ""),
+    el("p", { class: "muted" }, s.summary),
+    el("div", { class: "price" }, s.scan ? `${s.price_month_eur} ${t("per_month")}` : t("from", { p: s.price_from_eur })),
+    s.scan ? pick(s.key) : el("button", { class: "btn", type: "button", onclick: () => go("pentest") }, t("request_pentest")))));
+  const bundles = el("div", { class: "services" }, ...cat.bundles.map((x) => el("div", { class: "service" },
+    el("h3", {}, x.name),
+    el("p", { class: "muted" }, `${t("includes")}: ${x.services.map(shortName).join(" + ")}`),
+    el("div", { class: "price" }, `${x.price_month_eur} ${t("per_month")}`, el("s", {}, `${x.list_price_eur} €`)),
+    el("p", { class: "muted" }, t("save_pct", { p: x.list_price_eur - x.price_month_eur })),
+    pick(x.key))));
+  $("main").replaceChildren(
+    el("section", { class: "card" }, el("h2", {}, t("plan_title")), msg, el("p", {}, status),
+      b.limits.ai_triage ? el("p", { class: "muted" }, t("ai_left", { n: b.ai_requests_left })) : "",
+      el("p", { class: "muted" }, t("ai_extra")),
+      b.billing_enabled ? "" : el("p", { class: "notice" }, t("billing_off")),
+      el("div", { class: "toolbar" }, checkoutBtn,
+        b.can_manage ? el("button", { class: "btn", type: "button", onclick: async () => {
+          const r = await api(`/api/installations/${encodeURIComponent(instId())}/billing/portal`, { method: "POST" }); location.href = r.url;
+        } }, t("manage")) : "")),
+    el("section", {}, el("h2", {}, t("bundles")), bundles),
+    el("section", {}, el("h2", {}, t("choose")), services));
+}
+
+// -- tendencia: una serie, cruceta con desglose por severidad y vista de tabla -------------------------
+let lastTrend = null;
+function renderTrend(points) {
+  lastTrend = points;
+  // Se dibuja al ancho real: escalar un viewBox fijo encoge los textos de los ejes en móvil.
+  const W = Math.max(280, Math.round($("trend").clientWidth || 640)), H = 220, P = { l: 34, r: 8, t: 10, b: 24 };
+  const totals = points.map((p) => SEVERITIES.reduce((a, s) => a + p[s], 0));
+  const max = Math.max(4, ...totals);
+  const step = Math.pow(10, Math.floor(Math.log10(max))) * (max / Math.pow(10, Math.floor(Math.log10(max))) > 5 ? 2 : 1);
+  const top = Math.ceil(max / step) * step;
+  const x = (i) => P.l + (i * (W - P.l - P.r)) / Math.max(1, points.length - 1);
+  const y = (v) => P.t + (H - P.t - P.b) * (1 - v / top);
+  const NS = "http://www.w3.org/2000/svg";
+  const s = (tag, attrs) => { const n = document.createElementNS(NS, tag); for (const k in attrs) n.setAttribute(k, attrs[k]); return n; };
+  const svg = s("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": t("trend_title") });
+  const grid = s("g", { class: "grid" }), axis = s("g", { class: "axis" });
+  for (let v = 0; v <= top; v += step) {
+    grid.append(s("line", { x1: P.l, x2: W - P.r, y1: y(v), y2: y(v) }));
+    const lbl = s("text", { x: P.l - 6, y: y(v) + 4, "text-anchor": "end" }); lbl.textContent = v; axis.append(lbl);
+  }
+  [0, Math.floor((points.length - 1) / 2), points.length - 1].forEach((i) => {
+    const lbl = s("text", { x: x(i), y: H - 6, "text-anchor": i === 0 ? "start" : i === points.length - 1 ? "end" : "middle" });
+    lbl.textContent = new Date(points[i].date + "T00:00:00").toLocaleDateString(lang, { day: "numeric", month: "short" });
+    axis.append(lbl);
+  });
+  const path = totals.map((v, i) => `${i ? "L" : "M"}${x(i)},${y(v)}`).join("");
+  svg.append(grid, axis,
+    s("path", { class: "area", d: `${path}L${x(points.length - 1)},${y(0)}L${x(0)},${y(0)}Z` }),
+    s("path", { class: "line", d: path }));
+  const cross = s("line", { class: "cross", y1: P.t, y2: H - P.b, visibility: "hidden" });
+  const dot = s("circle", { class: "dot", r: 5, visibility: "hidden" });
+  svg.append(cross, dot);
+  const tip = el("div", { class: "tip", hidden: true });
+  const box = $("trend"); box.replaceChildren(svg, tip);
+  const hit = s("rect", { x: P.l, y: 0, width: W - P.l - P.r, height: H, fill: "transparent" });
+  svg.append(hit);
+  const show = (evt) => {
+    const r = svg.getBoundingClientRect();
+    const px = ((evt.clientX - r.left) / r.width) * W;
+    const i = Math.max(0, Math.min(points.length - 1, Math.round(((px - P.l) / (W - P.l - P.r)) * (points.length - 1))));
+    cross.setAttribute("x1", x(i)); cross.setAttribute("x2", x(i)); cross.setAttribute("visibility", "visible");
+    dot.setAttribute("cx", x(i)); dot.setAttribute("cy", y(totals[i])); dot.setAttribute("visibility", "visible");
+    tip.replaceChildren(el("b", {}, new Date(points[i].date + "T00:00:00").toLocaleDateString(lang), " · ", totals[i]),
+      ...SEVERITIES.filter((sv) => points[i][sv]).map((sv) => el("div", { class: "row" }, sevLabel(sv), el("span", {}, points[i][sv]))));
+    tip.hidden = false;
+    const left = (x(i) / W) * r.width;
+    tip.style.left = `${Math.min(r.width - tip.offsetWidth, Math.max(0, left + 12))}px`;
+    tip.style.top = "8px";
+  };
+  hit.addEventListener("pointermove", show);
+  hit.addEventListener("pointerleave", () => { tip.hidden = true; cross.setAttribute("visibility", "hidden"); dot.setAttribute("visibility", "hidden"); });
+
+  $("trend-table").replaceChildren(el("table", {},
+    el("tr", {}, el("th", {}, t("date")), ...SEVERITIES.map((sv) => el("th", { class: "num" }, t(sv))), el("th", { class: "num" }, t("total"))),
+    ...points.map((p, i) => el("tr", {}, el("td", {}, p.date), ...SEVERITIES.map((sv) => el("td", { class: "num" }, p[sv])),
+                               el("td", { class: "num" }, totals[i])))));
+}
+
+// -- eventos globales ------------------------------------------------------------------------------
+$("lang").addEventListener("click", async () => {
+  lang = lang === "es" ? "en" : "es";
+  try { localStorage.setItem("lang", lang); } catch {}
+  applyLang();
+  if (!state.me) { showLogin(); return; }
+  state.catalog = await api(`/api/catalog?lang=${lang}`);
+  state.scans = {};
+  renderTabs(); go(state.view, state.param);
+});
+$("inst").addEventListener("change", () => loadInstallation("overview"));
+$("gh-lang").addEventListener("change", async (e) => {
+  await api(`/api/installations/${encodeURIComponent(instId())}/preferences`, { method: "PATCH", body: JSON.stringify({ language: e.target.value }) });
+  const inst = state.me.installations.find((i) => String(i.id) === instId());
+  if (inst) inst.language = e.target.value;
+});
+$("logout").addEventListener("click", async () => { await api("/auth/logout", { method: "POST" }).catch(() => {}); location.href = "/app"; });
+let resizeTimer;
+window.addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => { if (lastTrend && $("trend")) renderTrend(lastTrend); }, 150); });
+boot();
+</script>
+</body>
+</html>

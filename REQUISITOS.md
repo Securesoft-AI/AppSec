@@ -60,7 +60,7 @@ Leyenda: ✅ hecho · 🔜 MVP · ⏭ posterior
 - ✅ RF‑1.7 41 reglas SAST propias para Opengrep (Python 14, JS/TS 13, Java 8, Go 6), cada una con casos positivos y negativos. **Prohibido** usar reglas del registro de Semgrep (licencia incompatible con SaaS).
 - ✅ RF‑1.9 Fusión de hallazgos duplicados entre motores (misma línea y familia de CWE).
 - ✅ RF‑1.10 Supresión en el código con `appsec-ai: ignore`, `nosec` o `nosemgrep`.
-- 🔜 RF‑1.8 Escaneo incremental: en un PR solo se analizan los ficheros cambiados.
+- ✅ RF‑1.8 Escaneo incremental: en un PR los motores solo analizan los ficheros cambiados (Gitleaks y Checkov sobre una copia mínima; OSV solo si cambia algún manifiesto de dependencias). Un PR de más de 3.000 ficheros se escanea entero.
 
 ### M2. Seguridad de IA (diferenciador)
 - ✅ RF‑2.1 Inventario de IA: SDKs (Anthropic, OpenAI, Gemini, Bedrock, Mistral…), frameworks (LangChain/LangGraph, LlamaIndex, CrewAI, Agents SDK, MCP), modelos usados, herramientas de agentes y vector stores.
@@ -88,19 +88,19 @@ Leyenda: ✅ hecho · 🔜 MVP · ⏭ posterior
 - ✅ RF‑3.5 Presupuesto máximo de peticiones por escaneo; los ficheros más graves se analizan primero.
 - ✅ RF‑3.6 Resumen ejecutivo de seguridad de IA para el CTO.
 - ✅ RF‑3.7 Botón "Abrir PR con fixes" en el check de GitHub (y `POST /api/scans/{id}/fix-pr`): Claude propone ediciones exactas, se validan (texto único y sintaxis) y se abre un PR para revisión humana. Requiere permiso `contents: write`.
-- 🔜 RF‑3.8 El usuario marca "útil / no útil" en cada hallazgo; ese feedback alimenta el conjunto de evaluación.
+- ✅ RF‑3.8 El usuario marca "útil / no útil" en cada hallazgo desde el panel. El feedback alimenta el conjunto de evaluación (`GET /api/feedback/export`) solo si la organización lo autoriza por contrato (`eval_opt_in`).
 
 ### M4. Plataforma SaaS
 - ✅ RF‑4.1a GitHub App con permisos mínimos (contents: read, checks y pull requests: write), webhooks verificados con HMAC y gestión de instalaciones y repositorios.
-- 🔜 RF‑4.1b Inicio de sesión con GitHub en el panel web.
+- ✅ RF‑4.1b Inicio de sesión con GitHub (OAuth de la GitHub App): cada usuario solo ve las instalaciones a las que tiene acceso en GitHub.
 - ✅ RF‑4.2 Escaneo en cada PR (check con anotaciones en las líneas, comentario único que se actualiza, solo ficheros modificados) y escaneo completo en cada push a la rama por defecto. Reintentos y botón "Re-run".
 - ✅ RF‑4.2b Cola de escaneos en Postgres con varios workers, idempotente frente a reenvíos de webhooks.
 - ✅ RF‑4.2c API REST de instalaciones, repositorios y escaneos (acceso provisional con token de administrador).
-- 🔜 RF‑4.3 Panel por organización: hallazgos por severidad, repositorio, área y tendencia; inventario de IA.
+- ✅ RF‑4.3 Panel por organización (`/app`): hallazgos por severidad, repositorio, área y tendencia de 30 días; inventario de IA; detalle por repositorio con botón de fixes.
 - 🟡 RF‑4.4 Multi‑tenant: datos separados por instalación; clonado seguro (sin hooks, LFS ni enlaces simbólicos, token fuera de los argumentos), workdir temporal que siempre se borra, worker sin privilegios. Falta aislar cada escaneo en su propio contenedor efímero (gVisor/Firecracker).
-- 🔜 RF‑4.5 Facturación con Stripe (planes, límites de uso, prueba gratuita de 14 días).
-- 🔜 RF‑4.6 Interfaz y correos en inglés y español.
-- 🔜 RF‑4.7 Informe PDF descargable para cuestionarios de seguridad de clientes.
+- ✅ RF‑4.5 Facturación con Stripe (Checkout, Portal de cliente y webhooks firmados) y planes Free/Starter/Team/Business aplicados en el servidor: repositorios, escaneo en PR, escaneo semanal en Free, triage con IA con presupuesto mensual, botón de fixes, PDF y mapeo de cumplimiento. Prueba de Team de 14 días al instalar la App.
+- ✅ RF‑4.6 Inglés y español en panel, landing, informes (Markdown y PDF), checks, comentarios y PR de correcciones de GitHub, y en el triage. Cada organización elige el idioma de GitHub; cada usuario, el del panel. Los correos se traducirán cuando existan (hoy el servicio no envía ninguno).
+- ✅ RF‑4.7 Informe PDF descargable en español o inglés (panel, `GET /api/scans/{id}/report.pdf` y `appsec-ai scan --format pdf`), con metodología, mapeo a marcos de IA, inventario y detalle de hallazgos.
 - ⏭ RF‑4.8 GitLab y Bitbucket, Slack, Jira, SSO (SAML/OIDC), registros de auditoría.
 
 ## 5. Requisitos no funcionales
@@ -134,14 +134,29 @@ Estimación con Opus 5.5 (modelo por defecto): ~0,05–0,10 $ por fichero con ha
 
 ## 7. Modelo de negocio (hipótesis)
 
-| Plan | Precio | Incluye |
-|---|---|---|
-| Free | 0 | 1 repo, escaneo semanal, sin triage con IA |
-| Starter | 49 €/mes | 3 repos, escaneo en PR, triage con IA |
-| Team | 249 €/mes | 20 repos, seguridad de IA completa, auto‑fix, informe PDF |
-| Business | 799 €/mes | Repos ilimitados, informes de cumplimiento (EU AI Act/ISO 42001), SSO, soporte prioritario |
+Se cobra por servicios, no por desarrollador. Precios en `src/appsec_ai/services.py` (única fuente de verdad para web, panel y Stripe):
 
-Precios iguales en € y $ para simplificar. **Meta:** 20 clientes Team ≈ 5.000 €/mes de ingreso recurrente.
+| Servicio | Motor | Precio |
+|---|---|---|
+| Análisis de código (SAST) | Opengrep + 41 reglas propias | 29 €/mes |
+| Dependencias (SCA) | OSV-Scanner | 19 €/mes |
+| Secretos | Gitleaks | 19 €/mes |
+| Infraestructura (IaC) | Checkov | 19 €/mes |
+| Seguridad de IA (OWASP LLM) | Motor propio + reglas Java/Go | 49 €/mes |
+| Pentest | Equipo de seguridad (manual) | desde 2.900 € por proyecto |
+
+| Paquete | Incluye | Precio |
+|---|---|---|
+| Código | SAST + Secretos | 39 €/mes |
+| Supply chain | SCA + IaC | 29 €/mes |
+| Completo | Los cinco servicios de escaneo | 99 €/mes |
+
+- Free: Secretos y Dependencias, 1 repositorio, escaneo semanal, sin IA.
+- Prueba de 14 días con todos los servicios al instalar la App.
+- Cualquier servicio de pago: hasta 25 repositorios, PRs, triage con IA (1.500 peticiones/mes por servicio), PRs con correcciones e informe PDF. El mapeo a EU AI Act / ISO 42001 va con Seguridad de IA.
+- El cliente elige en el panel qué servicios se aplican a cada repositorio y puede escanear cuando quiera.
+
+Precios iguales en € y $ para simplificar. Hay que validarlos con los design partners y con el coste real de IA medido.
 
 ## 8. Hoja de ruta
 
@@ -150,6 +165,7 @@ Precios iguales en € y $ para simplificar. **Meta:** 20 clientes Team ≈ 5.00
 | ✅ 0 | Núcleo del motor + motor de IA + triage con Claude + CLI + tests |
 | ✅ 1 | 41 reglas SAST propias; motor de IA con tree-sitter y 15 reglas; validación con código real |
 | ✅ 2 | Backend del SaaS: GitHub App, webhooks, cola, worker, checks y comentarios en PR, Docker |
+| ✅ 3 | Servicios por separado (SAST, SCA, Secretos, IaC, IA, Pentest) con paquetes; panel unificado con vista por servicio, escaneo bajo demanda y solicitud de pentests; login de demo user/pass |
 | ✅ 2 | Landing bilingüe (nombre provisional "Atalaya") con lista de espera guardada en el backend y cabeceras de seguridad |
 | 2 | Probar el triage con la API real; conjunto de evaluación; crear la GitHub App y desplegar |
 | 1–2 | Landing bilingüe con lista de espera y precios; reclutar 5–10 design partners entre tus contactos |

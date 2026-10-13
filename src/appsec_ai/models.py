@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 from enum import Enum
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 
 
 class Severity(str, Enum):
@@ -78,6 +78,7 @@ class Finding(BaseModel):
     frameworks: list[str] = Field(default_factory=list)  # p. ej. "OWASP-LLM01", "CWE-78"
     triage: Triage | None = None
 
+    @computed_field  # se serializa: el panel lo usa para el feedback de cada hallazgo
     @property
     def fingerprint(self) -> str:
         """Identificador estable para deduplicar y cachear (no depende del número de línea)."""

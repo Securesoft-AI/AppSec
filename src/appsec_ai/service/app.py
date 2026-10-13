@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import hmac
+from collections import Counter
 import json
 import logging
 import os
@@ -12,14 +14,24 @@ from collections import defaultdict, deque
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
+from appsec_ai.service.auth import SESSION_COOKIE, SESSION_TTL, STATE_COOKIE, Authenticator, Principal, encode_session, new_state
 from appsec_ai.service.config import Settings, get_settings
 from appsec_ai.service.crypto import Cipher, unseal
-from appsec_ai.service.db import Database, FixRequest, Installation, Repository, Scan, ScanStatus, WaitlistEntry
-from appsec_ai.service.webhooks import handle_event, request_fix, verify_signature
+from appsec_ai.i18n import localize
+from appsec_ai.models import ScanResult
+from appsec_ai.service import dashboard
+from appsec_ai.service.crypto import seal
+from appsec_ai.service.db import (Database, FindingFeedback, FixRequest, Installation, PentestRequest, Repository,
+                                  Scan, ScanKind, ScanStatus, WaitlistEntry, utcnow)
+from appsec_ai.service.github import GitHubApp, GitHubError
+from appsec_ai.service import demo, plans
+from appsec_ai.services import PURCHASABLE, SCAN_SERVICES, catalog
+from appsec_ai.service.billing import BillingError, Stripe, apply_event, verify_event
+from appsec_ai.service.webhooks import PlanLimit, enqueue, handle_event, plan_block, request_fix, verify_signature
 
 log = logging.getLogger("appsec_ai.api")
 MAX_WEBHOOK_BYTES = 25 * 1024 * 1024  # límite de GitHub para webhooks
@@ -44,6 +56,51 @@ class WaitlistIn(BaseModel):
     lang: str = Field(default="es", max_length=5)
 
 
+class FeedbackIn(BaseModel):
+    fingerprint: str = Field(min_length=1, max_length=64)
+    useful: bool
+    comment: str = Field(default="", max_length=2000)
+
+
+class InstallationSettingsIn(BaseModel):
+    eval_opt_in: bool
+
+
+class PreferencesIn(BaseModel):
+    language: str = Field(pattern="^(es|en)$")
+
+
+class DemoLoginIn(BaseModel):
+    username: str = Field(max_length=100)
+    password: str = Field(max_length=200)
+
+
+class RepoServicesIn(BaseModel):
+    services: list[str] | None = None  # None = todos los contratados
+
+
+class ScanNowIn(BaseModel):
+    services: list[str] | None = None
+
+
+class PentestIn(BaseModel):
+    kind: str = Field(pattern="^(web|api|mobile|llm|network)$")
+    target: str = Field(min_length=3, max_length=500)
+    scope: str = Field(default="", max_length=5000)
+    preferred_dates: str = Field(default="", max_length=200)
+    contact_email: str = Field(max_length=320)
+
+
+class PentestUpdateIn(BaseModel):
+    status: str | None = Field(default=None, pattern="^(requested|scoping|scheduled|in_progress|reported|cancelled)$")
+    quote_eur: int | None = Field(default=None, ge=0)
+    report: dict | None = None  # {"summary": str, "findings": [{"title", "severity", "description", "fix"}]}
+
+
+class CheckoutIn(BaseModel):
+    items: list[str] = Field(min_length=1, max_length=10)  # servicios y/o paquetes
+
+
 class RateLimiter:
     """Límite sencillo en memoria por IP (suficiente para una landing con una instancia)."""
 
@@ -62,6 +119,12 @@ class RateLimiter:
         return True
 
 
+def web_file(name: str, env: str = "") -> Path | None:
+    candidates = [Path(os.environ.get(env, "")) if env else Path(""), Path.cwd() / "web" / name,
+                  Path(__file__).resolve().parents[3] / "web" / name]
+    return next((p for p in candidates if str(p) not in ("", ".") and p.is_file()), None)
+
+
 def landing_html() -> str | None:
     """La landing es un fragmento HTML (también se publica como vista previa); aquí se envuelve."""
     candidates = [Path(os.environ.get("LANDING_FILE", "")), Path.cwd() / "web/landing/index.html",
@@ -75,7 +138,8 @@ def landing_html() -> str | None:
             + path.read_text(encoding="utf-8") + "</body></html>")
 
 
-def create_app(settings: Settings | None = None, db: Database | None = None) -> FastAPI:
+def create_app(settings: Settings | None = None, db: Database | None = None, github: GitHubApp | None = None,
+               stripe: Stripe | None = None) -> FastAPI:
     settings = settings or get_settings()
     db = db or Database(settings.database_url, Cipher.from_keys(settings.data_encryption_key))
     if db.cipher is None:
@@ -83,8 +147,27 @@ def create_app(settings: Settings | None = None, db: Database | None = None) -> 
     db.create_all()
     app = FastAPI(title="appsec-ai", version="0.1.0", docs_url=None, redoc_url=None)
     admin_token = os.environ.get("ADMIN_API_TOKEN", "")
+    if settings.demo_login and not settings.session_secret:
+        import secrets as _secrets
+
+        # Demo sin configurar: secreto aleatorio por arranque (las sesiones caducan al reiniciar).
+        settings.session_secret = _secrets.token_hex(32)
+    auth = Authenticator(settings.session_secret, admin_token, settings.public_url)
+    github = github or GitHubApp(settings.github_app_id, settings.github_private_key, settings.github_api_url)
+    login_enabled = bool(settings.github_client_id and settings.github_client_secret and settings.session_secret)
+    secure_cookies = settings.public_url.startswith("https://")
+    callback_url = f"{settings.public_url}/auth/callback"
+    if stripe is None and settings.stripe_secret_key:
+        stripe = Stripe(settings.stripe_secret_key)
+    price_to_item = {price: item for item, price in settings.stripe_prices.items() if price}
+    login_limiter = RateLimiter(limit=10, window_seconds=300)
+    if settings.demo_login:
+        log.warning("MODO DEMO ACTIVO: login %s/**** con una organización de ejemplo. No usar con datos reales.",
+                    settings.demo_user)
+        demo.seed(db)
     waitlist_limiter = RateLimiter(limit=5, window_seconds=600)
     landing = landing_html()
+    panel = web_file("panel/index.html", "PANEL_FILE")
 
     @app.middleware("http")
     async def security_headers(request: Request, call_next):
@@ -93,10 +176,90 @@ def create_app(settings: Settings | None = None, db: Database | None = None) -> 
             response.headers.setdefault(k, v)
         return response
 
-    def require_admin(authorization: str = Header(default="")):
-        # Provisional hasta tener login con GitHub en el panel: sin token configurado no hay acceso.
-        if not admin_token or not hmac.compare_digest(authorization, f"Bearer {admin_token}"):
-            raise HTTPException(status_code=401, detail="no autorizado")
+    def require_admin(principal: Principal = Depends(auth)):
+        """Operaciones internas (p. ej. la lista de espera): solo con ADMIN_API_TOKEN."""
+        if not principal.admin:
+            raise HTTPException(status_code=403, detail="solo administradores")
+
+    def visible_repo(s, principal: Principal, repository_id: int) -> Repository:
+        repo = s.get(Repository, repository_id)
+        if repo is None or not principal.can_see(repo.installation_id):
+            raise HTTPException(status_code=404, detail="repositorio no encontrado")
+        return repo
+
+    def visible_scan(s, principal: Principal, scan_id: int) -> Scan:
+        scan = s.get(Scan, scan_id)
+        if scan is None:
+            raise HTTPException(status_code=404, detail="escaneo no encontrado")
+        visible_repo(s, principal, scan.repository_id)
+        return scan
+
+    # -- login con GitHub -------------------------------------------------------------------
+
+    @app.get("/auth/login", include_in_schema=False)
+    def login():
+        if not login_enabled:
+            raise HTTPException(status_code=503, detail="login con GitHub no configurado")
+        state = new_state()
+        resp = RedirectResponse(github.authorize_url(settings.github_client_id, callback_url, state), status_code=302)
+        resp.set_cookie(STATE_COOKIE, state, max_age=600, httponly=True, secure=secure_cookies, samesite="lax")
+        return resp
+
+    @app.get("/auth/callback", include_in_schema=False)
+    def oauth_callback(request: Request, code: str = "", state: str = ""):
+        expected = request.cookies.get(STATE_COOKIE, "")
+        if not login_enabled or not code or not expected or not hmac.compare_digest(state, expected):
+            raise HTTPException(status_code=400, detail="login no válido; vuelve a intentarlo")
+        try:
+            token = github.exchange_code(settings.github_client_id, settings.github_client_secret, code, callback_url)
+            user, installations = github.user_with_installations(token)
+        except GitHubError:
+            log.exception("fallo en el login con GitHub")
+            raise HTTPException(status_code=502, detail="GitHub no ha validado el login") from None
+        resp = RedirectResponse("/app", status_code=302)
+        resp.delete_cookie(STATE_COOKIE)
+        resp.set_cookie(SESSION_COOKIE, encode_session(settings.session_secret, user, installations),
+                        max_age=SESSION_TTL, httponly=True, secure=secure_cookies, samesite="lax")
+        log.info("login de %s con %d instalaciones", user["login"], len(installations))
+        return resp
+
+    @app.get("/auth/config", include_in_schema=False)
+    def auth_config():
+        return {"github": login_enabled, "demo": settings.demo_login}
+
+    @app.post("/auth/demo", include_in_schema=False)
+    def demo_login(data: DemoLoginIn, request: Request):
+        if not settings.demo_login or not settings.session_secret:
+            raise HTTPException(status_code=404, detail="no disponible")
+        ip = request.client.host if request.client else "?"
+        if not login_limiter.allow(ip):
+            raise HTTPException(status_code=429, detail="demasiados intentos")
+        ok = hmac.compare_digest(data.username.encode(), settings.demo_user.encode()) & \
+            hmac.compare_digest(data.password.encode(), settings.demo_password.encode())
+        if not ok:
+            raise HTTPException(status_code=401, detail="usuario o contraseña incorrectos")
+        resp = JSONResponse({"status": "ok"})
+        resp.set_cookie(SESSION_COOKIE, encode_session(settings.session_secret, {"id": 0, "login": "demo"},
+                                                       [demo.DEMO_INSTALLATION_ID]),
+                        max_age=SESSION_TTL, httponly=True, secure=secure_cookies, samesite="lax")
+        return resp
+
+    @app.post("/auth/logout", include_in_schema=False)
+    def logout(principal: Principal = Depends(auth)):
+        resp = JSONResponse({"status": "ok"})
+        resp.delete_cookie(SESSION_COOKIE)
+        return resp
+
+    @app.get("/api/me")
+    def me(principal: Principal = Depends(auth)):
+        with db.session() as s:
+            q = select(Installation).order_by(Installation.account_login)
+            if not principal.admin:
+                q = q.where(Installation.id.in_(principal.installations))
+            rows = s.scalars(q).all()
+            return {"login": principal.login, "admin": principal.admin,
+                    "installations": [{"id": r.id, "account": r.account_login, "plan": r.plan,
+                                       "language": r.language or settings.language} for r in rows]}
 
     @app.get("/healthz")
     def healthz():
@@ -107,6 +270,12 @@ def create_app(settings: Settings | None = None, db: Database | None = None) -> 
         if landing is None:
             raise HTTPException(status_code=404, detail="landing no encontrada")
         return HTMLResponse(landing)
+
+    @app.get("/app", response_class=HTMLResponse, include_in_schema=False)
+    def panel_page():
+        if panel is None:
+            raise HTTPException(status_code=404, detail="panel no encontrado")
+        return HTMLResponse(panel.read_text(encoding="utf-8"))
 
     @app.post("/api/waitlist")
     def join_waitlist(data: WaitlistIn, request: Request):
@@ -151,54 +320,353 @@ def create_app(settings: Settings | None = None, db: Database | None = None) -> 
         log.info("webhook %s %s -> %s", x_github_delivery, x_github_event, outcome)
         return outcome
 
-    @app.get("/api/installations", dependencies=[Depends(require_admin)])
-    def list_installations():
+    @app.get("/api/installations")
+    def list_installations(principal: Principal = Depends(auth)):
         with db.session() as s:
-            rows = s.scalars(select(Installation).order_by(Installation.created_at.desc())).all()
+            q = select(Installation).order_by(Installation.created_at.desc())
+            if not principal.admin:
+                q = q.where(Installation.id.in_(principal.installations))
+            rows = s.scalars(q).all()
             return [{"id": r.id, "account": r.account_login, "plan": r.plan, "active": r.active} for r in rows]
 
-    @app.get("/api/installations/{installation_id}/repositories", dependencies=[Depends(require_admin)])
-    def list_repositories(installation_id: int):
+    @app.get("/api/installations/{installation_id}/repositories")
+    def list_repositories(installation_id: int, principal: Principal = Depends(auth)):
+        if not principal.can_see(installation_id):
+            raise HTTPException(status_code=404, detail="instalación no encontrada")
         with db.session() as s:
             rows = s.scalars(select(Repository).where(Repository.installation_id == installation_id)
                              .order_by(Repository.full_name)).all()
-            return [{"id": r.id, "full_name": r.full_name, "private": r.private, "active": r.active} for r in rows]
+            return [{"id": r.id, "full_name": r.full_name, "private": r.private, "active": r.active,
+                     "services": r.services} for r in rows]
 
-    @app.get("/api/repositories/{repository_id}/scans", dependencies=[Depends(require_admin)])
-    def list_scans(repository_id: int, limit: int = 50):
+    @app.get("/api/repositories/{repository_id}/scans")
+    def list_scans(repository_id: int, limit: int = 50, principal: Principal = Depends(auth)):
         with db.session() as s:
+            visible_repo(s, principal, repository_id)
             rows = s.scalars(select(Scan).where(Scan.repository_id == repository_id)
                              .order_by(Scan.id.desc()).limit(min(limit, 200))).all()
             return [_scan_summary(r) for r in rows]
 
-    @app.get("/api/scans/{scan_id}", dependencies=[Depends(require_admin)])
-    def get_scan(scan_id: int):
+    @app.get("/api/scans/{scan_id}")
+    def get_scan(scan_id: int, lang: str = "", principal: Principal = Depends(auth)):
         with db.session() as s:
-            scan = s.get(Scan, scan_id)
-            if scan is None:
-                raise HTTPException(status_code=404, detail="escaneo no encontrado")
-            return {**_scan_summary(scan), "result": unseal(db.cipher, scan.result)}
+            scan = visible_scan(s, principal, scan_id)
+            votes = s.scalars(select(FindingFeedback).where(
+                FindingFeedback.repository_id == scan.repository_id,
+                FindingFeedback.user_login == principal.login)).all()
+            result = unseal(db.cipher, scan.result)
+            if lang and result:
+                # Título y mensaje de cada hallazgo en el idioma del panel.
+                for f, model in zip(result.get("findings", []), ScanResult.model_validate(result).findings):
+                    f["title"], f["message"] = localize(model, lang)
+            return {**_scan_summary(scan), "result": result, "feedback": {v.fingerprint: v.useful for v in votes}}
 
-    @app.post("/api/scans/{scan_id}/fix-pr", dependencies=[Depends(require_admin)])
-    def create_fix_pr(scan_id: int):
+    @app.get("/api/scans/{scan_id}/report.pdf")
+    def scan_report_pdf(scan_id: int, lang: str = "es", principal: Principal = Depends(auth)):
+        from appsec_ai.report_pdf import to_pdf
+
+        with db.session() as s:
+            scan = visible_scan(s, principal, scan_id)
+            if not scan.result:
+                raise HTTPException(status_code=409, detail="el escaneo aún no tiene resultado")
+            repo = s.get(Repository, scan.repository_id)
+            plan = plans.effective_plan(s.get(Installation, repo.installation_id))
+            if not plan.pdf_report:
+                raise HTTPException(status_code=402, detail=f"el plan {plan.name} no incluye el informe PDF")
+            result = ScanResult.model_validate(unseal(db.cipher, scan.result))
+            pdf = to_pdf(result, lang=lang, target=repo.full_name, commit=scan.head_sha, generated=scan.finished_at,
+                         include_compliance=plan.compliance)
+        filename = f"atalaya-{repo.full_name.replace('/', '-')}-{scan.head_sha[:7]}.pdf"
+        return Response(pdf, media_type="application/pdf",
+                        headers={"Content-Disposition": f'attachment; filename="{filename}"', "Cache-Control": "no-store"})
+
+    # -- panel por organización (RF-4.3) ------------------------------------------------------
+
+    @app.get("/api/installations/{installation_id}/dashboard")
+    def installation_dashboard(installation_id: int, principal: Principal = Depends(auth)):
+        if not principal.can_see(installation_id):
+            raise HTTPException(status_code=404, detail="instalación no encontrada")
+        since = utcnow() - dt.timedelta(days=dashboard.TREND_DAYS + 30)
+        with db.session() as s:
+            repos = {r.id: r.full_name for r in s.scalars(
+                select(Repository).where(Repository.installation_id == installation_id, Repository.active))}
+            recent = s.scalars(select(Scan).where(Scan.repository_id.in_(repos), Scan.created_at >= since)).all()
+            # Repos sin escaneos recientes: su último escaneo, aunque sea antiguo.
+            missing = set(repos) - {sc.repository_id for sc in recent}
+            older = s.scalars(select(Scan).where(Scan.repository_id.in_(missing))).all() if missing else []
+            latest_scans = dashboard.latest_per_repo(list(recent) + list(older))
+            results = {rid: ScanResult.model_validate(unseal(db.cipher, sc.result))
+                       for rid, sc in latest_scans.items() if sc.result}
+            data = dashboard.overview(repos, results, latest_scans)
+            data["trend"] = dashboard.trend(list(recent), utcnow().date())
+            data["repositories_without_scans"] = sorted(repos[r] for r in set(repos) - set(latest_scans))
+            # Todos los repositorios, con los servicios elegidos en cada uno (para el panel).
+            data["all_repositories"] = [{"id": r.id, "full_name": r.full_name, "services": r.services}
+                                        for r in s.scalars(select(Repository).where(
+                                            Repository.installation_id == installation_id, Repository.active)
+                                            .order_by(Repository.full_name))]
+            # Severidad por servicio (área), sumando el último escaneo de cada repositorio.
+            by_service: dict[str, Counter] = {}
+            for res in results.values():
+                for f in res.findings:
+                    if not f.is_suppressed:
+                        by_service.setdefault(f.category.value, Counter())[f.effective_severity.value] += 1
+            data["by_service"] = {cat: dict(c) for cat, c in by_service.items()}
+            return data
+
+    # -- feedback útil / no útil (RF-3.8) --------------------------------------------------------
+
+    @app.post("/api/scans/{scan_id}/feedback")
+    def give_feedback(scan_id: int, data: FeedbackIn, principal: Principal = Depends(auth)):
+        with db.session() as s, s.begin():
+            scan = visible_scan(s, principal, scan_id)
+            repo = s.get(Repository, scan.repository_id)
+            result = ScanResult.model_validate(unseal(db.cipher, scan.result)) if scan.result else None
+            finding = next((f for f in (result.findings if result else []) if f.fingerprint == data.fingerprint), None)
+            if finding is None:
+                raise HTTPException(status_code=404, detail="hallazgo no encontrado en este escaneo")
+            row = s.scalars(select(FindingFeedback).where(
+                FindingFeedback.repository_id == repo.id, FindingFeedback.fingerprint == data.fingerprint,
+                FindingFeedback.user_login == principal.login)).first()
+            if row is None:
+                row = FindingFeedback(installation_id=repo.installation_id, repository_id=repo.id,
+                                      fingerprint=data.fingerprint, user_login=principal.login)
+                s.add(row)
+            row.scan_id, row.rule_id, row.useful, row.comment = scan.id, finding.rule_id, data.useful, data.comment
+            row.finding = seal(db.cipher, finding.model_dump(mode="json"))
+            row.created_at = utcnow()
+        return {"fingerprint": data.fingerprint, "useful": data.useful}
+
+    @app.patch("/api/installations/{installation_id}/preferences")
+    def update_preferences(installation_id: int, data: PreferencesIn, principal: Principal = Depends(auth)):
+        """Idioma de los checks, comentarios y PR de correcciones de la organización."""
+        if not principal.can_see(installation_id):
+            raise HTTPException(status_code=404, detail="instalación no encontrada")
+        with db.session() as s, s.begin():
+            inst = s.get(Installation, installation_id)
+            if inst is None:
+                raise HTTPException(status_code=404, detail="instalación no encontrada")
+            inst.language = data.language
+            return {"id": inst.id, "language": inst.language}
+
+    # -- servicios: catálogo, elección por repositorio, escanear ahora y pentests ------------------
+
+    @app.get("/api/catalog")
+    def service_catalog(lang: str = "es"):
+        return catalog(lang)
+
+    def check_services(services: list[str] | None) -> list[str] | None:
+        if services is None:
+            return None
+        unknown = set(services) - set(SCAN_SERVICES)
+        if unknown or not services:
+            raise HTTPException(status_code=422, detail=f"servicios no válidos: {', '.join(sorted(unknown)) or '(ninguno)'}")
+        return [s for s in SCAN_SERVICES if s in services]
+
+    @app.patch("/api/repositories/{repository_id}/services")
+    def set_repo_services(repository_id: int, data: RepoServicesIn, principal: Principal = Depends(auth)):
+        """Qué servicios se aplican a este repositorio en PRs y pushes (de entre los contratados)."""
+        with db.session() as s, s.begin():
+            repo = visible_repo(s, principal, repository_id)
+            repo.services = check_services(data.services)
+            return {"id": repo.id, "services": repo.services}
+
+    @app.post("/api/repositories/{repository_id}/scans")
+    def scan_now(repository_id: int, data: ScanNowIn, principal: Principal = Depends(auth)):
+        """Escanea ahora la rama por defecto con los servicios elegidos."""
+        services = check_services(data.services)
+        with db.session() as s:
+            repo = visible_repo(s, principal, repository_id)
+            inst = s.get(Installation, repo.installation_id)
+            plan = plans.effective_plan(inst)
+            if services and not set(services) <= plan.services:
+                missing = ", ".join(sorted(set(services) - plan.services))
+                raise HTTPException(status_code=402, detail=f"servicios no contratados: {missing}")
+            if demo.is_demo(repo.installation_id) and settings.demo_login:
+                # La organización de ejemplo no está en GitHub: se escanea al momento su código de ejemplo.
+                scan = demo.scan_demo_repo(db, repository_id, services or sorted(plan.services), principal.login)
+                return _scan_summary(scan)
+            reason = plan_block(s, repo, inst, ScanKind.MANUAL)
+            if reason:
+                raise HTTPException(status_code=402, detail=reason)
+            full_name, branch, installation_id = repo.full_name, repo.default_branch, repo.installation_id
+        try:
+            sha = github.installation(installation_id).branch_head(full_name, branch)
+        except GitHubError:
+            log.exception("no se pudo leer la rama %s de %s", branch, full_name)
+            raise HTTPException(status_code=502, detail="GitHub no ha devuelto la rama") from None
+        with db.session() as s, s.begin():
+            repo = s.get(Repository, repository_id)
+            scan = enqueue(s, repo, ScanKind.MANUAL, sha, f"refs/heads/{branch}")
+            if scan is None:
+                raise HTTPException(status_code=409, detail="no se ha podido encolar el escaneo")
+            if scan.status in (ScanStatus.COMPLETED.value, ScanStatus.FAILED.value):
+                # Mismo commit con otros servicios: se vuelve a lanzar.
+                scan.status, scan.attempts, scan.error, scan.check_run_id = ScanStatus.QUEUED.value, 0, "", None
+            scan.services, scan.requested_by = services, principal.login
+            return _scan_summary(scan)
+
+    @app.post("/api/installations/{installation_id}/pentests", status_code=201)
+    def request_pentest(installation_id: int, data: PentestIn, principal: Principal = Depends(auth)):
+        if not EMAIL_RE.match(data.contact_email.strip().lower()):
+            raise HTTPException(status_code=422, detail="email no válido")
+        with db.session() as s, s.begin():
+            visible_installation(s, principal, installation_id)
+            row = PentestRequest(installation_id=installation_id, requested_by=principal.login, kind=data.kind,
+                                 target=data.target.strip(), scope=data.scope.strip(),
+                                 preferred_dates=data.preferred_dates.strip(), contact_email=data.contact_email.strip())
+            s.add(row)
+            s.flush()
+            log.info("pentest %s solicitado por %s (instalación %s)", row.id, principal.login, installation_id)
+            return _pentest_summary(row, db.cipher)
+
+    @app.get("/api/installations/{installation_id}/pentests")
+    def list_pentests(installation_id: int, principal: Principal = Depends(auth)):
+        with db.session() as s:
+            visible_installation(s, principal, installation_id)
+            rows = s.scalars(select(PentestRequest).where(PentestRequest.installation_id == installation_id)
+                             .order_by(PentestRequest.id.desc())).all()
+            return [_pentest_summary(r, db.cipher) for r in rows]
+
+    @app.get("/api/admin/pentests", dependencies=[Depends(require_admin)])
+    def admin_pentests(status: str = ""):
+        with db.session() as s:
+            q = select(PentestRequest).order_by(PentestRequest.id.desc())
+            if status:
+                q = q.where(PentestRequest.status == status)
+            return [_pentest_summary(r, db.cipher) for r in s.scalars(q).all()]
+
+    @app.patch("/api/admin/pentests/{pentest_id}", dependencies=[Depends(require_admin)])
+    def update_pentest(pentest_id: int, data: PentestUpdateIn):
+        """El equipo de seguridad actualiza el estado, el presupuesto y publica el informe."""
+        with db.session() as s, s.begin():
+            row = s.get(PentestRequest, pentest_id)
+            if row is None:
+                raise HTTPException(status_code=404, detail="pentest no encontrado")
+            if data.status is not None:
+                row.status = data.status
+            if data.quote_eur is not None:
+                row.quote_eur = data.quote_eur
+            if data.report is not None:
+                row.report = seal(db.cipher, data.report)
+            row.updated_at = utcnow()
+            return _pentest_summary(row, db.cipher)
+
+    # -- planes y facturación (RF-4.5) ------------------------------------------------------------
+
+    def visible_installation(s, principal: Principal, installation_id: int) -> Installation:
+        inst = s.get(Installation, installation_id) if principal.can_see(installation_id) else None
+        if inst is None:
+            raise HTTPException(status_code=404, detail="instalación no encontrada")
+        return inst
+
+    @app.get("/api/installations/{installation_id}/billing")
+    def billing_status(installation_id: int, principal: Principal = Depends(auth)):
+        with db.session() as s:
+            inst = visible_installation(s, principal, installation_id)
+            plan = plans.effective_plan(inst)
+            limits = {**plan.__dict__, "services": sorted(plan.services)}
+            return {"plan": plan.name, "subscribed": list(inst.modules or []), "status": inst.subscription_status,
+                    "services": sorted(plan.services),
+                    "trial_days_left": plans.trial_days_left(inst) if plan.name == "trial" else 0,
+                    "ai_requests_left": plans.ai_requests_left(inst, plan), "limits": limits,
+                    "can_manage": bool(inst.stripe_customer_id), "billing_enabled": stripe is not None}
+
+    @app.post("/api/installations/{installation_id}/billing/checkout")
+    def billing_checkout(installation_id: int, data: CheckoutIn, principal: Principal = Depends(auth)):
+        unknown = set(data.items) - set(PURCHASABLE)
+        if unknown:
+            raise HTTPException(status_code=422, detail=f"no se puede contratar: {', '.join(sorted(unknown))}")
+        prices = [settings.stripe_prices.get(i) for i in dict.fromkeys(data.items)]
+        if stripe is None or not all(prices):
+            raise HTTPException(status_code=503, detail="facturación no configurada")
+        with db.session() as s:
+            inst = visible_installation(s, principal, installation_id)
+            customer = inst.stripe_customer_id
+        try:
+            url = stripe.checkout_url(prices, installation_id, customer, f"{settings.public_url}/app?billing=ok",
+                                      f"{settings.public_url}/app?billing=cancel")
+        except BillingError:
+            log.exception("Stripe Checkout falló")
+            raise HTTPException(status_code=502, detail="no se pudo iniciar el pago") from None
+        return {"url": url}
+
+    @app.post("/api/installations/{installation_id}/billing/portal")
+    def billing_portal(installation_id: int, principal: Principal = Depends(auth)):
+        if stripe is None:
+            raise HTTPException(status_code=503, detail="facturación no configurada")
+        with db.session() as s:
+            customer = visible_installation(s, principal, installation_id).stripe_customer_id
+        if not customer:
+            raise HTTPException(status_code=409, detail="esta organización aún no tiene suscripción")
+        try:
+            return {"url": stripe.portal_url(customer, f"{settings.public_url}/app")}
+        except BillingError:
+            log.exception("Stripe Portal falló")
+            raise HTTPException(status_code=502, detail="no se pudo abrir la facturación") from None
+
+    @app.post("/webhooks/stripe", include_in_schema=False)
+    async def stripe_webhook(request: Request, stripe_signature: str = Header(default="")):
+        body = await request.body()
+        try:
+            event = verify_event(body, stripe_signature, settings.stripe_webhook_secret)
+        except (BillingError, ValueError):
+            raise HTTPException(status_code=400, detail="firma no válida") from None
+        with db.session() as s, s.begin():
+            outcome = apply_event(s, event, price_to_item)
+        log.info("stripe %s %s -> %s", event.get("id"), event.get("type"), outcome)
+        return outcome
+
+    @app.patch("/api/installations/{installation_id}/settings", dependencies=[Depends(require_admin)])
+    def update_installation_settings(installation_id: int, data: InstallationSettingsIn):
+        """El permiso para usar el feedback en la evaluación es contractual: lo activa operaciones."""
+        with db.session() as s, s.begin():
+            inst = s.get(Installation, installation_id)
+            if inst is None:
+                raise HTTPException(status_code=404, detail="instalación no encontrada")
+            inst.eval_opt_in = data.eval_opt_in
+            return {"id": inst.id, "eval_opt_in": inst.eval_opt_in}
+
+    @app.get("/api/feedback/export", dependencies=[Depends(require_admin)])
+    def export_feedback():
+        """Feedback de las instalaciones que lo autorizan, listo para ampliar evals/triage."""
+        with db.session() as s:
+            rows = s.execute(select(FindingFeedback).join(Installation, Installation.id == FindingFeedback.installation_id)
+                             .where(Installation.eval_opt_in).order_by(FindingFeedback.id)).scalars().all()
+            return [{"rule_id": r.rule_id, "useful": r.useful, "comment": r.comment,
+                     "suggested_label": "true_positive" if r.useful else "false_positive",
+                     "finding": unseal(db.cipher, r.finding)} for r in rows]
+
+    @app.post("/api/scans/{scan_id}/fix-pr")
+    def create_fix_pr(scan_id: int, principal: Principal = Depends(auth)):
         """Lo mismo que el botón "Abrir PR con fixes" del check de GitHub."""
         with db.session() as s, s.begin():
-            scan = s.get(Scan, scan_id)
-            if scan is None:
-                raise HTTPException(status_code=404, detail="escaneo no encontrado")
+            scan = visible_scan(s, principal, scan_id)
             if scan.status != ScanStatus.COMPLETED.value:
                 raise HTTPException(status_code=409, detail="el escaneo aún no ha terminado")
-            return _fix_summary(request_fix(s, scan, "api"), db.cipher)
+            try:
+                return _fix_summary(request_fix(s, scan, principal.login), db.cipher)
+            except PlanLimit as e:
+                raise HTTPException(status_code=402, detail=str(e)) from None
 
-    @app.get("/api/scans/{scan_id}/fix-pr", dependencies=[Depends(require_admin)])
-    def get_fix_pr(scan_id: int):
+    @app.get("/api/scans/{scan_id}/fix-pr")
+    def get_fix_pr(scan_id: int, principal: Principal = Depends(auth)):
         with db.session() as s:
+            visible_scan(s, principal, scan_id)
             fix = s.scalars(select(FixRequest).where(FixRequest.scan_id == scan_id)).first()
             if fix is None:
                 raise HTTPException(status_code=404, detail="sin petición de corrección")
             return _fix_summary(fix, db.cipher)
 
     return app
+
+
+def _pentest_summary(row: PentestRequest, cipher=None) -> dict:
+    return {"id": row.id, "kind": row.kind, "target": row.target, "scope": row.scope,
+            "preferred_dates": row.preferred_dates, "contact_email": row.contact_email, "status": row.status,
+            "quote_eur": row.quote_eur, "requested_by": row.requested_by, "report": unseal(cipher, row.report) or {},
+            "created_at": row.created_at.isoformat() if row.created_at else None,
+            "updated_at": row.updated_at.isoformat() if row.updated_at else None}
 
 
 def _fix_summary(fix: FixRequest, cipher=None) -> dict:
@@ -209,6 +677,7 @@ def _fix_summary(fix: FixRequest, cipher=None) -> dict:
 def _scan_summary(scan: Scan) -> dict:
     return {
         "id": scan.id, "kind": scan.kind, "status": scan.status, "head_sha": scan.head_sha,
+        "services": scan.services, "requested_by": scan.requested_by,
         "pr_number": scan.pr_number, "summary": scan.summary, "error": scan.error,
         "created_at": scan.created_at.isoformat() if scan.created_at else None,
         "finished_at": scan.finished_at.isoformat() if scan.finished_at else None,

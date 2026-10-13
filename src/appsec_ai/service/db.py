@@ -27,6 +27,20 @@ class Installation(Base):
     account_type: Mapped[str] = mapped_column(String(20), default="Organization")
     plan: Mapped[str] = mapped_column(String(20), default="free")
     active: Mapped[bool] = mapped_column(default=True)
+    # El cliente acepta por escrito que su feedback (con fragmentos de código) mejore el triage.
+    eval_opt_in: Mapped[bool] = mapped_column(default=False)
+    # Idioma de lo que se publica en GitHub y del triage ("es" | "en"); vacío = REPORT_LANGUAGE.
+    language: Mapped[str] = mapped_column(String(5), default="")
+    # Facturación (Stripe) y uso. El plan efectivo lo calcula plans.effective_plan.
+    trial_ends_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    stripe_customer_id: Mapped[str] = mapped_column(String(100), default="", index=True)
+    stripe_subscription_id: Mapped[str] = mapped_column(String(100), default="")
+    # Servicios y paquetes contratados (claves de appsec_ai.services), según la suscripción de Stripe.
+    modules: Mapped[list] = mapped_column(JSON, default=list)
+    subscription_status: Mapped[str] = mapped_column(String(30), default="")
+    usage_period: Mapped[str] = mapped_column(String(7), default="")  # AAAA-MM
+    ai_requests_used: Mapped[int] = mapped_column(Integer, default=0)
+    billing_event_at: Mapped[int] = mapped_column(BigInteger, default=0)  # último evento de Stripe aplicado
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     repositories: Mapped[list["Repository"]] = relationship(back_populates="installation", cascade="all, delete-orphan")
@@ -41,6 +55,8 @@ class Repository(Base):
     default_branch: Mapped[str] = mapped_column(String(200), default="main")
     private: Mapped[bool] = mapped_column(default=True)
     active: Mapped[bool] = mapped_column(default=True)
+    # Servicios que el usuario quiere en este repositorio; None = todos los contratados.
+    services: Mapped[list | None] = mapped_column(JSON, nullable=True)
 
     installation: Mapped[Installation] = relationship(back_populates="repositories")
     scans: Mapped[list["Scan"]] = relationship(back_populates="repository", cascade="all, delete-orphan")
@@ -56,6 +72,7 @@ class ScanStatus(str, Enum):
 class ScanKind(str, Enum):
     PULL_REQUEST = "pull_request"
     FULL = "full"
+    MANUAL = "manual"  # "Escanear ahora" desde el panel: rama por defecto, servicios elegidos
 
 
 class Scan(Base):
@@ -71,6 +88,9 @@ class Scan(Base):
     head_sha: Mapped[str] = mapped_column(String(64))
     ref: Mapped[str] = mapped_column(String(300), default="")
     pr_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Servicios pedidos para este escaneo (escaneo bajo demanda); None = los del repositorio.
+    services: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    requested_by: Mapped[str] = mapped_column(String(200), default="")
     check_run_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     error: Mapped[str] = mapped_column(Text, default="")
@@ -98,6 +118,54 @@ class FixRequest(Base):
     detail: Mapped[dict] = mapped_column(JSON, default=dict)  # ficheros corregidos y descartados
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     finished_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class PentestStatus(str, Enum):
+    REQUESTED = "requested"      # el cliente lo ha pedido
+    SCOPING = "scoping"          # el equipo concreta alcance, fechas y presupuesto
+    SCHEDULED = "scheduled"
+    IN_PROGRESS = "in_progress"
+    REPORTED = "reported"        # informe entregado
+    CANCELLED = "cancelled"
+
+
+class PentestRequest(Base):
+    """Pentest manual pedido desde el panel. Lo gestiona el equipo de seguridad (API de administración)."""
+
+    __tablename__ = "pentest_requests"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    installation_id: Mapped[int] = mapped_column(ForeignKey("installations.id", ondelete="CASCADE"), index=True)
+    requested_by: Mapped[str] = mapped_column(String(200))
+    kind: Mapped[str] = mapped_column(String(20))                 # web | api | mobile | llm | network
+    target: Mapped[str] = mapped_column(String(500))
+    scope: Mapped[str] = mapped_column(Text, default="")
+    preferred_dates: Mapped[str] = mapped_column(String(200), default="")
+    contact_email: Mapped[str] = mapped_column(String(320))
+    status: Mapped[str] = mapped_column(String(20), default=PentestStatus.REQUESTED.value, index=True)
+    quote_eur: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    report: Mapped[dict] = mapped_column(JSON, default=dict)       # resumen y hallazgos (cifrado si hay clave)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class FindingFeedback(Base):
+    """Un usuario marca un hallazgo como útil o no útil (RF-3.8). Uno por usuario y hallazgo."""
+
+    __tablename__ = "finding_feedback"
+    __table_args__ = (UniqueConstraint("repository_id", "fingerprint", "user_login", name="uq_feedback"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    installation_id: Mapped[int] = mapped_column(ForeignKey("installations.id", ondelete="CASCADE"), index=True)
+    repository_id: Mapped[int] = mapped_column(ForeignKey("repositories.id", ondelete="CASCADE"), index=True)
+    scan_id: Mapped[int] = mapped_column(ForeignKey("scans.id", ondelete="CASCADE"))
+    fingerprint: Mapped[str] = mapped_column(String(64))
+    rule_id: Mapped[str] = mapped_column(String(200))
+    user_login: Mapped[str] = mapped_column(String(200))
+    useful: Mapped[bool] = mapped_column()
+    comment: Mapped[str] = mapped_column(Text, default="")
+    finding: Mapped[dict] = mapped_column(JSON, default=dict)  # copia del hallazgo (cifrada si hay clave)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class WaitlistEntry(Base):

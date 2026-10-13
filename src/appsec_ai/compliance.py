@@ -103,20 +103,21 @@ def summary(findings: list[Finding]) -> list[tuple[str, int, Mapping]]:
     return [(r, n, RULES[r]) for r, n in sorted(counts.items(), key=lambda x: (-x[1], x[0]))]
 
 
-def to_markdown(findings: list[Finding]) -> list[str]:
+def to_markdown(findings: list[Finding], lang: str = "es") -> list[str]:
+    from appsec_ai.i18n import ui
+
     rows = summary(findings)
     if not rows:
         return []
 
     def refs(ids, names):
         return "<br>".join(f"{i} {names[i]}" for i in ids) or "—"
-    out = ["## Mapeo a marcos de IA", "",
-           "_Orientativo: qué técnica de ataque, control o requisito toca cada tipo de hallazgo. No es una "
-           "evaluación de conformidad. Los artículos del EU AI Act citados obligan a los sistemas de alto riesgo._",
-           "", "| Regla | Hallazgos | MITRE ATLAS | NIST AI RMF | ISO/IEC 42001 | EU AI Act |",
+    out = [f"## {ui(lang, 'mapping')}", "", f"_{ui(lang, 'mapping_note')}_", "",
+           f"| {ui(lang, 'rule')} | {ui(lang, 'findings')} | MITRE ATLAS | NIST AI RMF | ISO/IEC 42001 | EU AI Act |",
            "|---|---|---|---|---|---|"]
     for rule, n, m in rows:
         out.append(f"| `{rule}` | {n} | {refs(m.atlas, ATLAS)} | {'<br>'.join(m.nist)} | "
-                   f"{refs(m.iso42001, ISO42001)} | {refs(m.eu_ai_act, EU_AI_ACT)} |")
+                   f"{refs(m.iso42001, ISO42001) if lang != 'en' else '<br>'.join(m.iso42001) or '—'} | "
+                   f"{refs(m.eu_ai_act, EU_AI_ACT) if lang != 'en' else '<br>'.join(m.eu_ai_act) or '—'} |")
     out.append("")
     return out

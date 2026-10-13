@@ -14,18 +14,29 @@ from appsec_ai.models import Finding, ScanResult
 from appsec_ai.scanner import apply_triage
 from appsec_ai.scanner import scan as run_scan
 from appsec_ai.service import render
+from appsec_ai.service import plans
+from appsec_ai.services import categories_for, engines_for
 from appsec_ai.service.config import Settings
 from appsec_ai.service.crypto import seal, unseal
-from appsec_ai.service.db import Database, FixRequest, Repository, Scan, ScanKind, ScanStatus, utcnow
+from appsec_ai.i18n import norm, ui
+from appsec_ai.service.db import Database, FixRequest, Installation, Repository, Scan, ScanKind, ScanStatus, utcnow
 from appsec_ai.service.github import GitHubApp, GitHubError
 from appsec_ai.service.sandbox import sandboxed_scan
 
 log = logging.getLogger("appsec_ai.worker")
 MAX_ATTEMPTS = 3
+MAX_INCREMENTAL_FILES = 3000  # límite de la API de GitHub para los ficheros de un PR
 
 
 def dir_size_mb(path: Path) -> float:
     return sum(p.stat().st_size for p in path.rglob("*") if p.is_file() and not p.is_symlink()) / 1_048_576
+
+
+def filter_to_categories(result: ScanResult, categories: set[str]) -> ScanResult:
+    """Solo los hallazgos de los servicios elegidos (un motor puede servir a varios, como Opengrep)."""
+    kept = [f for f in result.findings if f.category.value in categories]
+    inventory = result.ai_inventory if "ai" in categories else []
+    return result.model_copy(update={"findings": kept, "ai_inventory": inventory})
 
 
 def filter_to_files(result: ScanResult, files: set[str]) -> ScanResult:
@@ -42,10 +53,16 @@ class Worker:
         self.scanner = scanner or self._default_scanner
         self.triager_factory = triager_factory or self._default_triager
 
-    def _default_scanner(self, src: Path) -> ScanResult:
+    def _default_scanner(self, src: Path, only_files: set[str] | None = None,
+                         engines: list[str] | None = None) -> ScanResult:
         if self.settings.scan_sandbox == "none":
-            return run_scan(src)
-        return sandboxed_scan(src, self.settings.scan_sandbox_cmd, timeout=self.settings.scan_timeout)
+            return run_scan(src, engines=engines, only_files=only_files)
+        return sandboxed_scan(src, self.settings.scan_sandbox_cmd, timeout=self.settings.scan_timeout,
+                              only_files=only_files, engines=engines)
+
+    def _language(self, s, installation_id: int) -> str:
+        inst = s.get(Installation, installation_id)
+        return norm((inst.language if inst else "") or self.settings.language)
 
     def _default_triager(self, max_requests: int):
         if not self.settings.ai_triage:
@@ -86,6 +103,12 @@ class Worker:
             repo = s.get(Repository, scan.repository_id)
             repo_id, repo_name, installation_id = repo.id, repo.full_name, repo.installation_id
             kind, sha, pr_number, check_id = scan.kind, scan.head_sha, scan.pr_number, scan.check_run_id
+            lang = self._language(s, installation_id)
+            inst = s.get(Installation, installation_id)
+            plan = plans.effective_plan(inst)
+            ai_left = plans.ai_requests_left(inst, plan)
+            # Servicios de este escaneo: los pedidos (o los elegidos para el repositorio) que estén contratados.
+            selected = plans.scan_services(plan, scan.services or repo.services)
 
         gh = self.github.installation(installation_id)
         if not check_id:  # en un reintento se reutiliza el check ya creado
@@ -102,7 +125,7 @@ class Worker:
                 raise RuntimeError(f"el repositorio ocupa {size:.0f} MB (máximo {self.settings.max_repo_mb} MB)")
 
             if kind == ScanKind.PULL_REQUEST.value:
-                changed = set(gh.pull_request_files(repo_name, pr_number))
+                changed = set(gh.pull_request_files(repo_name, pr_number, limit=MAX_INCREMENTAL_FILES))
                 max_req = self.settings.ai_max_requests_pr
             else:
                 changed = None
@@ -110,30 +133,36 @@ class Worker:
 
             # El triage con IA solo se aplica a lo que se va a mostrar: primero se escanea sin IA,
             # se filtra por ficheros del PR y después se analiza con IA lo que queda.
-            result = self.scanner(src)
+            # RF-1.8: en un PR los motores solo analizan los ficheros cambiados. Un PR enorme (la API de
+            # GitHub no lista más de 3000 ficheros) se escanea entero y se filtra después.
+            incremental = changed is not None and len(changed) < MAX_INCREMENTAL_FILES
+            result = self.scanner(src, only_files=changed if incremental else None, engines=engines_for(selected))
+            result = filter_to_categories(result, categories_for(selected))
             if changed is not None:
                 result = filter_to_files(result, changed)
-            triager = self.triager_factory(max_req)
+            # El plan decide si hay triage con IA y cuántas peticiones quedan este mes.
+            triager = self.triager_factory(min(max_req, ai_left)) if ai_left > 0 else None
             ai_enabled = triager is not None
+            if triager is not None:
+                triager.language = lang
             if triager is not None and result.findings:
                 if self.settings.ai_cache_dir:
                     # Por repositorio: el triage contiene fragmentos del código del cliente.
                     triager.cache_dir = Path(self.settings.ai_cache_dir) / str(repo_id)
                     triager.cipher = self.db.cipher
                 apply_triage(src, result, triager)
+                self._record_ai_usage(installation_id, triager.requests)
             result.target = repo_name
         finally:
             shutil.rmtree(workdir, ignore_errors=True)
 
         findings = render.visible(result)
-        scope = ("Solo se muestran los hallazgos de los ficheros modificados en este PR."
-                 if changed is not None else "Escaneo completo de la rama por defecto.")
-        title, summary, text = render.check_output(result, scope)
+        title, summary, text = render.check_output(result, full_scan=changed is None, lang=lang)
         conclusion = render.conclusion(findings, self.settings.fail_on)
-        gh.complete_check_run(repo_name, check_id, conclusion, title, summary, text, render.annotations(findings),
-                              actions=render.fix_actions(result) if ai_enabled else None)
+        gh.complete_check_run(repo_name, check_id, conclusion, title, summary, text, render.annotations(findings, lang),
+                              actions=render.fix_actions(result, lang) if ai_enabled and plan.fix_pr else None)
         if pr_number:
-            gh.upsert_comment(repo_name, pr_number, render.pr_comment(result), render.COMMENT_MARKER)
+            gh.upsert_comment(repo_name, pr_number, render.pr_comment(result, lang=lang), render.COMMENT_MARKER)
 
         self._update(
             scan_id, status=ScanStatus.COMPLETED.value, finished_at=utcnow(), error="",
@@ -150,18 +179,27 @@ class Worker:
             scan = s.get(Scan, fix.scan_id)
             repo = s.get(Repository, scan.repository_id)
             repo_name, installation_id, attempt = repo.full_name, repo.installation_id, fix.attempts
+            lang = self._language(s, installation_id)
+            inst = s.get(Installation, installation_id)
+            plan = plans.effective_plan(inst)
+            ai_left = plans.ai_requests_left(inst, plan)
             sha, pr_number = scan.head_sha, scan.pr_number
             base_branch = scan.ref.removeprefix("refs/heads/") if scan.kind == ScanKind.PULL_REQUEST.value \
                 else repo.default_branch
             raw = unseal(self.db.cipher, scan.result)
             result = ScanResult.model_validate(raw) if raw else None
 
+        if not plan.fix_pr:
+            return self._finish_fix(fix_id, f"El plan {plan.name} no incluye PRs con correcciones.")
         targets = files_to_fix(render.visible(result)) if result else {}
         if not targets:
             return self._finish_fix(fix_id, "No hay problemas confirmados por la IA que corregir.")
+        if ai_left < len(targets):
+            return self._finish_fix(fix_id, "Se ha agotado el presupuesto mensual de IA del plan.")
         triager = self.triager_factory(len(targets))
         if triager is None:
             return self._finish_fix(fix_id, "El triage con IA está desactivado en este servicio.")
+        triager.language = lang
 
         gh = self.github.installation(installation_id)
         workdir = Path(tempfile.mkdtemp(prefix="appsec-ai-fix-", dir=self.settings.workdir or None))
@@ -179,24 +217,25 @@ class Worker:
         finally:
             shutil.rmtree(workdir, ignore_errors=True)
 
+        self._record_ai_usage(installation_id, triager.requests)
         detail = {"fixed": [fx.path for fx in fixes], "skipped": skipped, "llm_usage": dict(triager.usage)}
         if not fixes:
             if pr_number:
-                gh.upsert_comment(repo_name, pr_number, render.fix_failed_comment(skipped), render.FIX_MARKER)
+                gh.upsert_comment(repo_name, pr_number, render.fix_failed_comment(skipped, lang), render.FIX_MARKER)
             return self._finish_fix(fix_id, "No se ha podido generar ninguna corrección segura.", detail)
 
-        source = f"el PR #{pr_number}" if pr_number else f"el commit {sha[:7]}"
+        source = render.fix_source(pr_number, sha, lang)
         try:
             pr = gh.open_fix_pr(
                 repo_name, sha, base_branch, f"appsec-ai/fix-{sha[:7]}-{fix_id}-{attempt}",
                 [(fx.path, fx.fixed, modes[fx.path]) for fx in fixes],
-                render.fix_pr_title(fixes), render.fix_pr_body(fixes, skipped, source),
-                message=render.fix_pr_title(fixes))
+                render.fix_pr_title(fixes, lang), render.fix_pr_body(fixes, skipped, source, lang),
+                message=render.fix_pr_title(fixes, lang))
         except GitHubError as e:
             if " -> 403" in str(e) or " -> 404" in str(e):
                 # Sin permiso de escritura en contents: reintentar no sirve.
                 if pr_number:
-                    gh.upsert_comment(repo_name, pr_number, render.FIX_PERMISSION_COMMENT, render.FIX_MARKER)
+                    gh.upsert_comment(repo_name, pr_number, render.fix_permission_comment(lang), render.FIX_MARKER)
                 return self._finish_fix(fix_id, f"Sin permiso para crear la rama o el PR: {e}", detail)
             if " -> 422" in str(e):
                 # Rama base inexistente (PR desde un fork) o PR ya abierto: tampoco se arregla reintentando.
@@ -209,9 +248,14 @@ class Worker:
             row.pr_url, row.detail = pr["url"], seal(self.db.cipher, detail)
         if pr_number:
             try:
-                gh.upsert_comment(repo_name, pr_number, render.fix_comment(pr["url"], len(fixes)), render.FIX_MARKER)
+                gh.upsert_comment(repo_name, pr_number, render.fix_comment(pr["url"], len(fixes), lang), render.FIX_MARKER)
             except GitHubError:
                 log.exception("no se pudo comentar el PR de corrección %s", pr["url"])
+
+    def _record_ai_usage(self, installation_id: int, requests: int):
+        if requests:
+            with self.db.session() as s, s.begin():
+                plans.record_ai_usage(s.get(Installation, installation_id), requests)
 
     def _finish_fix(self, fix_id: int, error: str, detail: dict | None = None):
         """Fin sin PR: un motivo definitivo, no un error transitorio que merezca reintento."""
@@ -243,10 +287,10 @@ class Worker:
             scan.finished_at = None if retry else utcnow()
             repo = s.get(Repository, scan.repository_id)
             repo_name, installation_id, check_id = repo.full_name, repo.installation_id, scan.check_run_id
+            lang = self._language(s, installation_id)
         if not retry and check_id:
             try:
                 self.github.installation(installation_id).complete_check_run(
-                    repo_name, check_id, "neutral", "No se pudo completar el escaneo",
-                    "Ha ocurrido un error interno al analizar este commit. Lo estamos revisando.")
+                    repo_name, check_id, "neutral", ui(lang, "error_title"), ui(lang, "error_summary"))
             except Exception:  # noqa: BLE001
                 log.exception("no se pudo cerrar el check %s", check_id)

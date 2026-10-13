@@ -29,11 +29,13 @@ class AISecurityEngine(Engine):
     def __init__(self):
         self.inventory: list[AIComponent] = []
 
-    def run(self, target: Path) -> list[Finding]:
+    def run(self, target: Path, only: set[str] | None = None) -> list[Finding]:
         findings: list[Finding] = []
         inventory: list[AIComponent] = []
         for path in iter_source_files(target, PY_EXT | JS_EXT):
             rel = str(path.relative_to(target))
+            if only is not None and rel not in only:
+                continue
             if path.suffix in PY_EXT:
                 f, inv = analyze_python(rel, path.read_text(errors="replace"))
             elif path.name.endswith(".d.ts"):
