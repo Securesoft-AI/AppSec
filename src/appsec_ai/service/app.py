@@ -26,8 +26,8 @@ from appsec_ai.models import ScanResult
 from appsec_ai.service import dashboard
 from appsec_ai.service.crypto import seal
 from appsec_ai.service.db import (Database, FindingFeedback, FixRequest, Installation, PentestRequest, PentestStatus,
-                                  RedTeamRun, RedTeamTarget, Repository, Scan, ScanKind, ScanStatus, WaitlistEntry,
-                                  utcnow)
+                                  AuditLog, RedTeamRun, RedTeamTarget, Repository, Scan, ScanKind, ScanStatus,
+                                  WaitlistEntry, utcnow)
 from appsec_ai.service import ownership
 from appsec_ai import redteam
 from appsec_ai.service.github import GitHubApp, GitHubError
@@ -253,6 +253,8 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
         resp.set_cookie(SESSION_COOKIE, encode_session(settings.session_secret, user, installations, staff),
                         max_age=SESSION_TTL, httponly=True, secure=secure_cookies, samesite="lax")
         log.info("login de %s con %d instalaciones", user["login"], len(installations))
+        db.audit(None, user["login"], "auth.login", detail={"mode": "github", "installations": len(installations)},
+                 ip=request.client.host if request.client else "")
         return resp
 
     @app.get("/auth/config", include_in_schema=False)
@@ -274,6 +276,7 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
         resp.set_cookie(SESSION_COOKIE, encode_session(settings.session_secret, {"id": 0, "login": "demo"},
                                                        [demo.DEMO_INSTALLATION_ID], staff="own"),
                         max_age=SESSION_TTL, httponly=True, secure=secure_cookies, samesite="lax")
+        db.audit(demo.DEMO_INSTALLATION_ID, "demo", "auth.login", detail={"mode": "demo"}, ip=ip)
         return resp
 
     @app.post("/auth/logout", include_in_schema=False)
@@ -501,6 +504,8 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
         with db.session() as s, s.begin():
             repo = visible_repo(s, principal, repository_id)
             repo.services = check_services(data.services)
+            db.audit(repo.installation_id, principal.login, "repo.services_changed", repo.full_name,
+                     {"services": repo.services}, session=s)
             return {"id": repo.id, "services": repo.services}
 
     @app.post("/api/repositories/{repository_id}/scans")
@@ -517,6 +522,8 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
             if demo.is_demo(repo.installation_id) and settings.demo_login:
                 # La organización de ejemplo no está en GitHub: se escanea al momento su código de ejemplo.
                 scan = demo.scan_demo_repo(db, repository_id, services or sorted(plan.services), principal.login)
+                db.audit(repo.installation_id, principal.login, "scan.requested", repo.full_name,
+                         {"kind": "manual", "services": scan.services})
                 return _scan_summary(scan)
             reason = plan_block(s, repo, inst, ScanKind.MANUAL)
             if reason:
@@ -536,6 +543,8 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
                 # Mismo commit con otros servicios: se vuelve a lanzar.
                 scan.status, scan.attempts, scan.error, scan.check_run_id = ScanStatus.QUEUED.value, 0, "", None
             scan.services, scan.requested_by = services, principal.login
+            db.audit(repo.installation_id, principal.login, "scan.requested", repo.full_name,
+                     {"kind": "manual", "services": services, "sha": sha[:12]}, session=s)
             return _scan_summary(scan)
 
     @app.post("/api/installations/{installation_id}/pentests", status_code=201)
@@ -550,6 +559,7 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
             s.add(row)
             s.flush()
             log.info("pentest %s solicitado por %s (instalación %s)", row.id, principal.login, installation_id)
+            db.audit(installation_id, principal.login, "pentest.requested", str(row.id), {"kind": row.kind}, session=s)
             return _pentest_summary(row, db.cipher)
 
     @app.get("/api/installations/{installation_id}/pentests")
@@ -576,6 +586,7 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
                 raise HTTPException(status_code=409, detail="no hay un presupuesto pendiente de aceptar")
             row.accepted_at = row.updated_at = utcnow()
             log.info("presupuesto del pentest %s aceptado por %s", row.id, principal.login)
+            db.audit(installation_id, principal.login, "pentest.accepted", str(row.id), {"quote_eur": row.quote_eur}, session=s)
             return _pentest_summary(row, db.cipher)
 
     @app.post("/api/installations/{installation_id}/pentests/{pentest_id}/cancel")
@@ -586,6 +597,7 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
             if row.status not in (PentestStatus.REQUESTED.value, PentestStatus.SCOPING.value) or row.accepted_at:
                 raise HTTPException(status_code=409, detail="este pentest ya no se puede cancelar desde el panel")
             row.status, row.updated_at = PentestStatus.CANCELLED.value, utcnow()
+            db.audit(installation_id, principal.login, "pentest.cancelled", str(row.id), session=s)
             return _pentest_summary(row, db.cipher)
 
     @app.get("/api/installations/{installation_id}/pentests/{pentest_id}/report.pdf")
@@ -638,6 +650,8 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
                 row.status = data.status
             row.updated_at = utcnow()
             log.info("pentest %s actualizado por %s: %s", row.id, principal.login, row.status)
+            db.audit(row.installation_id, principal.login, "pentest.updated", str(row.id),
+                     {"status": row.status, "quote_eur": row.quote_eur}, session=s)
             return {**_pentest_summary(row, db.cipher), "installation_id": row.installation_id}
 
     # -- red teaming dinámico de endpoints con LLM (RF-2.7) ---------------------------------------
@@ -689,6 +703,7 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
                                 created_by=principal.login)
             s.add(tgt)
             s.flush()
+            db.audit(installation_id, principal.login, "redteam.target_created", host, {"id": tgt.id}, session=s)
             return _target_out(tgt)
 
     @app.get("/api/installations/{installation_id}/redteam/targets")
@@ -709,12 +724,16 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
             tgt.verified_at = utcnow() if method else None
             if not method:
                 raise HTTPException(status_code=409, detail="no se pudo comprobar la propiedad del dominio todavía")
+            db.audit(installation_id, principal.login, "redteam.verified", tgt.host, {"method": method}, session=s)
             return _target_out(tgt)
 
     @app.delete("/api/installations/{installation_id}/redteam/targets/{target_id}", status_code=204)
     def delete_target(installation_id: int, target_id: int, principal: Principal = Depends(auth)):
         with db.session() as s, s.begin():
-            s.delete(visible_target(s, principal, installation_id, target_id))
+            tgt = visible_target(s, principal, installation_id, target_id)
+            host = tgt.host
+            s.delete(tgt)
+        db.audit(installation_id, principal.login, "redteam.target_deleted", host, {"id": target_id})
         return Response(status_code=204)
 
     @app.post("/api/installations/{installation_id}/redteam/targets/{target_id}/runs", status_code=201)
@@ -733,6 +752,7 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
         if demo.is_demo(installation_id):
             with db.session() as s, s.begin():
                 demo.run_demo_redteam(db, s.get(RedTeamRun, run_id), s.get(RedTeamTarget, target_id))
+        db.audit(installation_id, principal.login, "redteam.run_started", str(target_id), {"run": run_id})
         with db.session() as s:
             return _run_out(s.get(RedTeamRun, run_id), db.cipher)
 
@@ -791,6 +811,7 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
         except BillingError:
             log.exception("Stripe Checkout falló")
             raise HTTPException(status_code=502, detail="no se pudo iniciar el pago") from None
+        db.audit(installation_id, principal.login, "billing.checkout", target=",".join(data.items))
         return {"url": url}
 
     @app.post("/api/installations/{installation_id}/billing/portal")
@@ -802,10 +823,12 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
         if not customer:
             raise HTTPException(status_code=409, detail="esta organización aún no tiene suscripción")
         try:
-            return {"url": stripe.portal_url(customer, f"{settings.public_url}/app")}
+            url = stripe.portal_url(customer, f"{settings.public_url}/app")
         except BillingError:
             log.exception("Stripe Portal falló")
             raise HTTPException(status_code=502, detail="no se pudo abrir la facturación") from None
+        db.audit(installation_id, principal.login, "billing.portal")
+        return {"url": url}
 
     @app.post("/webhooks/stripe", include_in_schema=False)
     async def stripe_webhook(request: Request, stripe_signature: str = Header(default="")):
@@ -817,6 +840,9 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
         with db.session() as s, s.begin():
             outcome = apply_event(s, event, price_to_item)
         log.info("stripe %s %s -> %s", event.get("id"), event.get("type"), outcome)
+        if outcome.get("installation") and "modules" in outcome:
+            db.audit(outcome["installation"], "stripe", "billing.subscription", event.get("type", ""),
+                     {"modules": outcome.get("modules"), "status": outcome.get("status")})
         return outcome
 
     @app.patch("/api/installations/{installation_id}/settings", dependencies=[Depends(require_admin)])
@@ -827,7 +853,19 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
             if inst is None:
                 raise HTTPException(status_code=404, detail="instalación no encontrada")
             inst.eval_opt_in = data.eval_opt_in
+            db.audit(installation_id, "admin", "settings.changed", "eval_opt_in", {"eval_opt_in": inst.eval_opt_in}, session=s)
             return {"id": inst.id, "eval_opt_in": inst.eval_opt_in}
+
+    @app.get("/api/installations/{installation_id}/audit")
+    def installation_audit(installation_id: int, limit: int = 100, principal: Principal = Depends(auth)):
+        """Registro de auditoría de la organización (RF-4.8): lo ve cualquier usuario con acceso a ella."""
+        limit = max(1, min(limit, 500))
+        with db.session() as s:
+            visible_installation(s, principal, installation_id)
+            rows = s.scalars(select(AuditLog).where(AuditLog.installation_id == installation_id)
+                             .order_by(AuditLog.id.desc()).limit(limit)).all()
+            return [{"id": r.id, "actor": r.actor, "action": r.action, "target": r.target, "detail": r.detail,
+                     "ip": r.ip, "at": r.created_at.isoformat() if r.created_at else None} for r in rows]
 
     @app.get("/api/feedback/export", dependencies=[Depends(require_admin)])
     def export_feedback():
@@ -835,9 +873,11 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
         with db.session() as s:
             rows = s.execute(select(FindingFeedback).join(Installation, Installation.id == FindingFeedback.installation_id)
                              .where(Installation.eval_opt_in).order_by(FindingFeedback.id)).scalars().all()
-            return [{"rule_id": r.rule_id, "useful": r.useful, "comment": r.comment,
-                     "suggested_label": "true_positive" if r.useful else "false_positive",
-                     "finding": unseal(db.cipher, r.finding)} for r in rows]
+            out = [{"rule_id": r.rule_id, "useful": r.useful, "comment": r.comment,
+                    "suggested_label": "true_positive" if r.useful else "false_positive",
+                    "finding": unseal(db.cipher, r.finding)} for r in rows]
+        db.audit(None, "admin", "feedback.exported", detail={"rows": len(out)})
+        return out
 
     @app.post("/api/scans/{scan_id}/fix-pr")
     def create_fix_pr(scan_id: int, principal: Principal = Depends(auth)):

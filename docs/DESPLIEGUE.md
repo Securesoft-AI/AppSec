@@ -152,6 +152,10 @@ ejecuciones desde la misma cola que los escaneos. La verificación DNS usa `dnsp
 - `SCAN_SANDBOX_CMD` envuelve ese subproceso con un sandbox del sistema. Ejemplo con bubblewrap (hay que
   instalarlo en la imagen): `bwrap --unshare-all --share-net --die-with-parent --ro-bind / / --dev /dev --proc /proc --tmpfs /tmp --bind {src} {src}`.
   Así el escaneo solo puede escribir en su directorio.
+- **Registros de auditoría** (RF-4.8): cada acción sensible (inicio de sesión, escaneo solicitado, cambios en
+  pentests y red team, facturación y ajustes) se guarda en la tabla `audit_log`, que es de solo añadir: la
+  aplicación no tiene ningún endpoint para modificar ni borrar entradas. Cada organización ve su propia
+  actividad en el panel (`GET /api/installations/{id}/audit`). El detalle no guarda secretos ni código.
 - **Cifrado en reposo** con `DATA_ENCRYPTION_KEY` (Fernet): resultados de escaneos y detalle de las correcciones
   en la base de datos, y la caché del triage en disco. Para rotar la clave: `DATA_ENCRYPTION_KEY=nueva,antigua`
   (cifra con la primera y descifra con todas). Las filas anteriores sin cifrar se siguen leyendo. Sin clave, el
