@@ -21,7 +21,7 @@ from appsec_ai.service.crypto import seal, unseal
 from appsec_ai.i18n import norm, ui
 from appsec_ai.service.db import Database, FixRequest, Installation, Repository, Scan, ScanKind, ScanStatus, utcnow
 from appsec_ai.service.github import GitHubApp, GitHubError
-from appsec_ai.service.sandbox import sandboxed_scan
+from appsec_ai.service.sandbox import runner_scan, sandboxed_scan
 
 log = logging.getLogger("appsec_ai.worker")
 MAX_ATTEMPTS = 3
@@ -55,6 +55,9 @@ class Worker:
 
     def _default_scanner(self, src: Path, only_files: set[str] | None = None,
                          engines: list[str] | None = None) -> ScanResult:
+        if self.settings.scan_runner:  # un contenedor efímero por escaneo (RF-4.4)
+            return runner_scan(src, self.settings.scan_runner, timeout=self.settings.scan_timeout,
+                               only_files=only_files, engines=engines)
         if self.settings.scan_sandbox == "none":
             return run_scan(src, engines=engines, only_files=only_files)
         return sandboxed_scan(src, self.settings.scan_sandbox_cmd, timeout=self.settings.scan_timeout,
