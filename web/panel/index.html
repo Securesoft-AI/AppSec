@@ -210,6 +210,14 @@ const I18N = {
     rt_vuln: "vulnerables", rt_probes: "sondas", rt_safe: "El endpoint resistió todas las sondas.", rt_remediation: "Mitigación",
     rt_evidence: "Evidencia", rt_delete_q: "¿Eliminar este objetivo y sus ejecuciones?", rt_run_queued: "Ejecución en cola.",
     rt_st_queued: "En cola", rt_st_running: "Ejecutando…", rt_st_completed: "Terminado", rt_st_failed: "Error",
+    audit_title: "Actividad reciente", audit_none: "Sin actividad registrada todavía.", audit_who: "Quién",
+    audit_what: "Acción", audit_target: "Sobre", audit_when: "Cuándo",
+    "a.auth.login": "Inicio de sesión", "a.scan.requested": "Escaneo solicitado", "a.repo.services_changed": "Servicios del repositorio cambiados",
+    "a.pentest.requested": "Pentest solicitado", "a.pentest.accepted": "Presupuesto de pentest aceptado", "a.pentest.cancelled": "Pentest cancelado",
+    "a.pentest.updated": "Pentest actualizado", "a.redteam.target_created": "Objetivo de red team creado", "a.redteam.verified": "Dominio verificado",
+    "a.redteam.target_deleted": "Objetivo de red team eliminado", "a.redteam.run_started": "Red team lanzado",
+    "a.settings.changed": "Ajustes cambiados", "a.billing.checkout": "Pago iniciado", "a.billing.portal": "Facturación abierta",
+    "a.billing.subscription": "Suscripción actualizada",
   },
   en: {
     logout: "Sign out", gh_lang: "GitHub language",
@@ -265,6 +273,14 @@ const I18N = {
     rt_vuln: "vulnerable", rt_probes: "probes", rt_safe: "The endpoint resisted every probe.", rt_remediation: "Mitigation",
     rt_evidence: "Evidence", rt_delete_q: "Delete this target and its runs?", rt_run_queued: "Run queued.",
     rt_st_queued: "Queued", rt_st_running: "Running\u2026", rt_st_completed: "Done", rt_st_failed: "Error",
+    audit_title: "Recent activity", audit_none: "No activity recorded yet.", audit_who: "Who",
+    audit_what: "Action", audit_target: "On", audit_when: "When",
+    "a.auth.login": "Sign-in", "a.scan.requested": "Scan requested", "a.repo.services_changed": "Repository services changed",
+    "a.pentest.requested": "Pentest requested", "a.pentest.accepted": "Pentest quote accepted", "a.pentest.cancelled": "Pentest cancelled",
+    "a.pentest.updated": "Pentest updated", "a.redteam.target_created": "Red team target created", "a.redteam.verified": "Domain verified",
+    "a.redteam.target_deleted": "Red team target deleted", "a.redteam.run_started": "Red team launched",
+    "a.settings.changed": "Settings changed", "a.billing.checkout": "Checkout started", "a.billing.portal": "Billing opened",
+    "a.billing.subscription": "Subscription updated",
   },
 };
 let lang = (() => { try { return localStorage.getItem("lang") || (navigator.language || "es").slice(0, 2); } catch { return "es"; } })();
@@ -810,7 +826,22 @@ function viewPlan() {
           const r = await api(`/api/installations/${encodeURIComponent(instId())}/billing/portal`, { method: "POST" }); location.href = r.url;
         } }, t("manage")) : "")),
     el("section", {}, el("h2", {}, t("bundles")), bundles),
-    el("section", {}, el("h2", {}, t("choose")), services));
+    el("section", {}, el("h2", {}, t("choose")), services),
+    auditCard());
+}
+
+function auditCard() {
+  const body = el("div", { class: "scroll" }, el("p", { class: "muted" }, "…"));
+  const card = el("section", { class: "card" }, el("h2", {}, t("audit_title")), body);
+  api(`/api/installations/${encodeURIComponent(instId())}/audit?limit=50`).then((rows) => {
+    if (!rows.length) { body.replaceChildren(el("p", { class: "muted" }, t("audit_none"))); return; }
+    const head = el("tr", {}, ...["audit_when", "audit_who", "audit_what", "audit_target"].map((k) => el("th", {}, t(k))));
+    body.replaceChildren(el("table", {}, el("thead", {}, head), el("tbody", {}, ...rows.map((e) => el("tr", {},
+      el("td", {}, new Date(e.at).toLocaleString(lang)), el("td", {}, e.actor),
+      el("td", {}, t("a." + e.action, {}) !== "a." + e.action ? t("a." + e.action) : e.action),
+      el("td", { class: "mono" }, e.target || t("none")))))));
+  }).catch(() => body.replaceChildren(el("p", { class: "muted" }, t("audit_none"))));
+  return card;
 }
 
 // -- tendencia: una serie, cruceta con desglose por severidad y vista de tabla -------------------------

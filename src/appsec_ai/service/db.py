@@ -220,6 +220,26 @@ class RedTeamRun(Base):
     finished_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class AuditLog(Base):
+    """Registro de auditoría append-only (RF-4.8): acciones sensibles sobre una instalación.
+
+    No se modifica ni se borra desde la aplicación (solo el borrado en cascada al eliminar la instalación).
+    El detalle no guarda secretos ni código: solo identificadores y cambios de estado.
+    """
+
+    __tablename__ = "audit_log"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    installation_id: Mapped[int | None] = mapped_column(
+        ForeignKey("installations.id", ondelete="CASCADE"), nullable=True, index=True)
+    actor: Mapped[str] = mapped_column(String(200))          # login del usuario, "admin", "stripe", "system"
+    action: Mapped[str] = mapped_column(String(50), index=True)  # p. ej. "scan.requested", "pentest.updated"
+    target: Mapped[str] = mapped_column(String(300), default="")
+    detail: Mapped[dict] = mapped_column(JSON, default=dict)
+    ip: Mapped[str] = mapped_column(String(64), default="")
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+
+
 class WaitlistEntry(Base):
     """Interesados que dejan su email en la landing."""
 
@@ -275,6 +295,22 @@ class Database:
 
     def claim_next_redteam(self) -> "RedTeamRun | None":
         return self._claim(RedTeamRun)
+
+    def audit(self, installation_id, actor: str, action: str, target: str = "", detail: dict | None = None,
+              ip: str = "", session: Session | None = None):
+        """Añade una entrada al registro de auditoría.
+
+        Si se pasa `session` (una transacción ya abierta), la entrada se escribe en ella y es atómica con la
+        acción. Si no, se abre una transacción propia. En SQLite hay que reusar la sesión abierta porque el
+        fichero se bloquea para escrituras.
+        """
+        entry = AuditLog(installation_id=installation_id, actor=actor, action=action, target=target[:300],
+                         detail=detail or {}, ip=ip[:64])
+        if session is not None:
+            session.add(entry)
+        else:
+            with self.session() as s, s.begin():
+                s.add(entry)
 
     def _claim(self, model, **values):
         for _ in range(5):
