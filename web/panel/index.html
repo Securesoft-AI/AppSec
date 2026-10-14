@@ -124,6 +124,14 @@ tr.link { cursor: pointer; } tr.link:hover td { background: var(--accent-soft); 
 .price { font-family: var(--font-display); font-size: 1.4rem; font-weight: 800; }
 .price s { color: var(--muted); font-size: 0.9rem; font-weight: 400; margin-left: 6px; }
 .status { font-weight: 600; color: var(--ink); }
+.team-note { border-left: 3px solid var(--accent); background: var(--accent-soft); padding: 8px 12px; border-radius: 0 8px 8px 0; margin: 8px 0; }
+.editor { display: grid; gap: 12px; margin-top: 12px; padding-top: 12px; border-top: 1px dashed var(--line); }
+.pt-rows { display: grid; gap: 12px; }
+.pt-finding { display: grid; gap: 8px; grid-template-columns: 1fr 160px auto; align-items: end;
+              border: 1px solid var(--line); border-radius: 8px; padding: 10px; }
+.pt-finding .full { grid-column: 1 / -1; }
+@media (max-width: 640px) { .pt-finding { grid-template-columns: 1fr; } }
+details > summary { cursor: pointer; color: var(--accent); }
 [hidden] { display: none !important; }
 </style>
 </head>
@@ -183,6 +191,14 @@ const I18N = {
     manage: "Gestionar facturación", billing_off: "La facturación aún no está activada en este servicio.",
     billing_ok: "Pago recibido. Los servicios se activan en unos segundos.", request_pentest: "Solicitar pentest",
     includes: "Incluye", ai_extra: "Cualquier servicio de pago incluye triage con IA, PRs con correcciones e informe PDF.",
+    p_team_says: "Mensaje del equipo", p_accept: "Aceptar presupuesto", p_accepted: "Presupuesto aceptado el {d}",
+    p_cancel: "Cancelar solicitud", p_cancel_q: "¿Cancelar esta solicitud de pentest?", p_pdf: "Descargar informe (PDF)",
+    p_details: "Ver hallazgos", p_fix: "Corrección", p_desc: "Descripción",
+    tab_team: "Equipo", team_title: "Pentests de clientes", team_filter_all: "Todos los estados", team_none: "No hay pentests con este filtro.",
+    team_client: "Cliente", team_requested_by: "Solicitado por", team_status: "Estado", team_quote: "Presupuesto (€)",
+    team_notes: "Mensaje para el cliente", team_summary: "Resumen ejecutivo del informe", team_findings: "Hallazgos del informe",
+    team_add: "Añadir hallazgo", team_remove: "Quitar", team_title_f: "Título", team_sev: "Severidad", team_save: "Guardar cambios",
+    team_edit: "Gestionar", team_waiting: "Esperando a que el cliente acepte el presupuesto",
   },
   en: {
     logout: "Sign out", gh_lang: "GitHub language",
@@ -219,6 +235,14 @@ const I18N = {
     manage: "Manage billing", billing_off: "Billing is not enabled on this service yet.",
     billing_ok: "Payment received. Services activate in a few seconds.", request_pentest: "Request pentest",
     includes: "Includes", ai_extra: "Every paid service includes AI triage, fix PRs and the PDF report.",
+    p_team_says: "Message from the team", p_accept: "Accept quote", p_accepted: "Quote accepted on {d}",
+    p_cancel: "Cancel request", p_cancel_q: "Cancel this pentest request?", p_pdf: "Download report (PDF)",
+    p_details: "Show findings", p_fix: "Fix", p_desc: "Description",
+    tab_team: "Team", team_title: "Client pentests", team_filter_all: "All statuses", team_none: "No pentests match this filter.",
+    team_client: "Client", team_requested_by: "Requested by", team_status: "Status", team_quote: "Quote (€)",
+    team_notes: "Message to the client", team_summary: "Report executive summary", team_findings: "Report findings",
+    team_add: "Add finding", team_remove: "Remove", team_title_f: "Title", team_sev: "Severity", team_save: "Save changes",
+    team_edit: "Manage", team_waiting: "Waiting for the client to accept the quote",
   },
 };
 let lang = (() => { try { return localStorage.getItem("lang") || (navigator.language || "es").slice(0, 2); } catch { return "es"; } })();
@@ -321,7 +345,7 @@ async function loadInstallation(view = null, param = null) {
 function renderTabs() {
   $("tabs").hidden = false;
   const tabs = [["overview", t("tab_overview")], ...SCAN_SERVICES.map((k) => ["service:" + k, shortName(k)]),
-                ["pentest", t("tab_pentest")], ["plan", t("tab_plan")]];
+                ["pentest", t("tab_pentest")], ["plan", t("tab_plan")], ...(state.me.staff ? [["team", t("tab_team")]] : [])];
   $("tab-list").replaceChildren(...tabs.map(([id, label]) => el("button", { type: "button", "data-view": id,
     onclick: () => { const [v, p] = id.split(":"); go(v, p || null); } }, label)));
 }
@@ -330,7 +354,7 @@ function go(view, param = null) {
   state.view = view; state.param = param;
   const id = param && view === "service" ? `service:${param}` : view;
   document.querySelectorAll("#tab-list button").forEach((b) => b.setAttribute("aria-current", b.dataset.view === id ? "page" : "false"));
-  ({ overview: viewOverview, service: viewService, repo: viewRepo, pentest: viewPentest, plan: viewPlan })[view](param);
+  ({ overview: viewOverview, service: viewService, repo: viewRepo, pentest: viewPentest, plan: viewPlan, team: viewTeam })[view](param);
   window.scrollTo({ top: 0 });
 }
 
@@ -528,16 +552,117 @@ async function viewPentest() {
       el("span", { class: "pill off" }, t("from", { p: s.price_from_eur }))), el("p", {}, s.summary), msg, form),
     el("section", { class: "card" }, el("h2", {}, t("p_list")), list));
   async function loadList() {
-    const items = await api(`/api/installations/${encodeURIComponent(instId())}/pentests`);
-    list.replaceChildren(...(items.length ? items.map((p) => el("article", { class: "finding" },
-      el("div", { class: "meta" }, el("span", { class: "status" }, t("s_" + p.status)), el("span", {}, t("k_" + p.kind)),
-         el("span", {}, new Date(p.created_at).toLocaleDateString(lang)), p.quote_eur ? el("span", {}, `${t("p_quote")}: ${p.quote_eur} €`) : ""),
-      el("h3", { class: "mono" }, p.target), p.scope ? el("p", {}, p.scope) : "",
-      p.report && p.report.summary ? el("div", {}, el("h3", {}, t("p_report")), el("p", {}, p.report.summary),
-        ...(p.report.findings || []).map((x) => el("div", { class: "meta" }, sevLabel(SEVERITIES.includes(x.severity) ? x.severity : "info"), el("span", {}, x.title || "")))) : ""))
-      : [el("p", { class: "muted" }, t("p_none"))]));
+    const base = `/api/installations/${encodeURIComponent(instId())}/pentests`;
+    const items = await api(base);
+    const act = async (p, action) => {
+      if (action === "cancel" && !confirm(t("p_cancel_q"))) return;
+      try { await api(`${base}/${p.id}/${action}`, { method: "POST" }); loadList(); }
+      catch (err) { msg.textContent = t("error") + err.message; msg.className = "notice"; msg.hidden = false; }
+    };
+    list.replaceChildren(...(items.length ? items.map((p) => {
+      const canAccept = p.status === "scoping" && p.quote_eur != null && !p.accepted_at;
+      const canCancel = ["requested", "scoping"].includes(p.status) && !p.accepted_at;
+      const report = p.status === "reported" && p.report && p.report.summary ? p.report : null;
+      return el("article", { class: "finding" },
+        el("div", { class: "meta" }, el("span", { class: "status" }, t("s_" + p.status)), el("span", {}, t("k_" + p.kind)),
+          el("span", {}, new Date(p.created_at).toLocaleDateString(lang)),
+          p.quote_eur != null ? el("span", {}, `${t("p_quote")}: ${p.quote_eur.toLocaleString(lang)} €`) : "",
+          p.accepted_at ? el("span", { class: "pill on" }, t("p_accepted", { d: new Date(p.accepted_at).toLocaleDateString(lang) })) : ""),
+        el("h3", { class: "mono" }, p.target), p.scope ? el("p", {}, p.scope) : "",
+        p.notes ? el("div", { class: "team-note" }, el("b", {}, t("p_team_says") + ": "), p.notes) : "",
+        report ? pentestReport(report, `${base}/${p.id}/report.pdf?lang=${lang}`) : "",
+        canAccept || canCancel ? el("div", { class: "vote" },
+          canAccept ? el("button", { class: "btn primary", type: "button", onclick: () => act(p, "accept") }, t("p_accept")) : "",
+          canCancel ? el("button", { class: "btn", type: "button", onclick: () => act(p, "cancel") }, t("p_cancel")) : "") : "");
+    }) : [el("p", { class: "muted" }, t("p_none"))]));
   }
   loadList();
+}
+
+function pentestReport(report, pdfUrl) {
+  const findings = report.findings || [];
+  const sev = (x) => (SEVERITIES.includes(x.severity) ? x.severity : "info");
+  return el("div", {}, el("h3", {}, t("p_report")), el("p", {}, report.summary),
+    el("div", { class: "meta" }, ...SEVERITIES.map((s) => {
+      const n = findings.filter((x) => sev(x) === s).length;
+      return n ? el("span", {}, sevLabel(s), " ", n) : "";
+    })),
+    findings.length ? el("details", {}, el("summary", {}, t("p_details")),
+      ...findings.map((x) => el("div", { class: "finding" }, el("div", { class: "meta" }, sevLabel(sev(x))),
+        el("h3", {}, x.title || ""), x.description ? el("p", {}, el("b", {}, t("p_desc") + ": "), x.description) : "",
+        x.fix ? el("p", {}, el("b", {}, t("p_fix") + ": "), x.fix) : ""))) : "",
+    el("div", { class: "vote" }, el("a", { class: "btn", href: pdfUrl }, t("p_pdf"))));
+}
+
+// -- vista Equipo: el equipo de seguridad gestiona los pentests de todos los clientes ------------
+const PENTEST_STATUSES = ["requested", "scoping", "scheduled", "in_progress", "reported", "cancelled"];
+async function viewTeam() {
+  const msg = el("p", { class: "notice", hidden: true });
+  const filter = el("select", { "aria-label": t("team_status"), onchange: () => load() },
+    el("option", { value: "" }, t("team_filter_all")), ...PENTEST_STATUSES.map((k) => el("option", { value: k }, t("s_" + k))));
+  const list = el("div", {});
+  $("main").replaceChildren(el("section", { class: "card" },
+    el("div", { class: "toolbar" }, el("h2", {}, t("team_title")), filter), msg, list));
+
+  async function load() {
+    const items = await api(`/api/admin/pentests${filter.value ? "?status=" + encodeURIComponent(filter.value) : ""}`);
+    list.replaceChildren(...(items.length ? items.map(teamCard) : [el("p", { class: "muted" }, t("team_none"))]));
+  }
+
+  function teamCard(p) {
+    const editor = el("div", { class: "editor", hidden: true });
+    const card = el("article", { class: "finding" },
+      el("div", { class: "meta" }, el("span", { class: "status" }, t("s_" + p.status)), el("span", {}, p.account),
+        el("span", {}, t("k_" + p.kind)), el("span", {}, new Date(p.created_at).toLocaleDateString(lang)),
+        p.quote_eur != null ? el("span", {}, `${p.quote_eur.toLocaleString(lang)} €`) : "",
+        p.accepted_at ? el("span", { class: "pill on" }, t("p_accepted", { d: new Date(p.accepted_at).toLocaleDateString(lang) }))
+          : p.status === "scoping" && p.quote_eur != null ? el("span", { class: "pill off" }, t("team_waiting")) : ""),
+      el("h3", { class: "mono" }, p.target), p.scope ? el("p", {}, p.scope) : "",
+      el("p", { class: "muted" }, `${t("team_requested_by")}: ${p.requested_by} · ${p.contact_email}`,
+        p.preferred_dates ? ` · ${t("p_dates")}: ${p.preferred_dates}` : ""),
+      el("button", { class: "btn", type: "button", "aria-expanded": "false", onclick: (e) => {
+        editor.hidden = !editor.hidden; e.currentTarget.setAttribute("aria-expanded", String(!editor.hidden));
+        if (!editor.hidden && !editor.childElementCount) buildEditor(p, editor);
+      } }, t("team_edit")), editor);
+    return card;
+  }
+
+  function buildEditor(p, box) {
+    const status = el("select", {}, ...PENTEST_STATUSES.map((k) => el("option", { value: k, selected: k === p.status }, t("s_" + k))));
+    const quote = el("input", { type: "number", min: 0, step: 100, value: p.quote_eur ?? "" });
+    const notes = el("textarea", { maxlength: 5000 }); notes.value = p.notes || "";
+    const summary = el("textarea", { maxlength: 20000 }); summary.value = (p.report && p.report.summary) || "";
+    const rows = el("div", { class: "pt-rows" });
+    const addRow = (f = {}) => {
+      const title = el("input", { maxlength: 300, value: f.title || "" });
+      const sev = el("select", {}, ...SEVERITIES.map((s) => el("option", { value: s, selected: s === (f.severity || "medium") }, t(s))));
+      const desc = el("textarea", { maxlength: 10000 }); desc.value = f.description || "";
+      const fix = el("textarea", { maxlength: 10000 }); fix.value = f.fix || "";
+      const row = el("div", { class: "pt-finding" }, el("label", {}, t("team_title_f"), title), el("label", {}, t("team_sev"), sev),
+        el("button", { class: "btn", type: "button", onclick: () => row.remove() }, t("team_remove")),
+        el("label", { class: "full" }, t("p_desc"), desc), el("label", { class: "full" }, t("p_fix"), fix));
+      row.read = () => ({ title: title.value.trim(), severity: sev.value, description: desc.value, fix: fix.value });
+      rows.append(row);
+    };
+    ((p.report && p.report.findings) || []).forEach(addRow);
+    const saved = el("p", { class: "notice ok", hidden: true });
+    box.replaceChildren(
+      el("div", { class: "form" }, el("label", {}, t("team_status"), status), el("label", {}, t("team_quote"), quote),
+        el("label", { class: "full" }, t("team_notes"), notes), el("label", { class: "full" }, t("team_summary"), summary)),
+      el("h3", {}, t("team_findings")), rows,
+      el("div", { class: "vote" }, el("button", { class: "btn", type: "button", onclick: () => addRow() }, t("team_add")),
+        el("button", { class: "btn primary", type: "button", onclick: async () => {
+          const body = { notes: notes.value, report: { summary: summary.value,
+            findings: [...rows.children].map((r) => r.read()).filter((f) => f.title) } };
+          if (quote.value !== "") body.quote_eur = Number(quote.value);
+          if (status.value !== p.status) body.status = status.value;
+          try {
+            await api(`/api/admin/pentests/${p.id}`, { method: "PATCH", body: JSON.stringify(body) });
+            msg.hidden = true; saved.textContent = t("saved"); saved.hidden = false; setTimeout(load, 800);
+          } catch (err) { msg.textContent = t("error") + err.message; msg.hidden = false; msg.scrollIntoView({ block: "nearest" }); }
+        } }, t("team_save"))), saved);
+  }
+  load();
 }
 
 // -- servicios y plan ----------------------------------------------------------------------------

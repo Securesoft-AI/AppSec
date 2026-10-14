@@ -84,3 +84,29 @@ def test_legacy_database_is_adopted(url):
     assert {"scans", "pentest_requests", "finding_feedback", "fix_requests", "waitlist"} <= tables
     db.migrate()
     assert _version(db) == _head()
+
+
+def test_upgrade_keeps_existing_rows(url):
+    """Cada migración se aplica sobre datos reales: aquí, 0002 sobre un pentest creado con el esquema 0001."""
+    from alembic import command
+
+    from appsec_ai.service.db import PentestRequest, _alembic_config
+
+    db = Database(url)
+    cfg = _alembic_config()
+    with db.engine.begin() as conn:
+        cfg.attributes["connection"] = conn
+        command.upgrade(cfg, "0001")
+        conn.execute(text("INSERT INTO installations (id, account_login, account_type, plan, active, eval_opt_in,"
+                          " language, stripe_customer_id, stripe_subscription_id, modules, subscription_status,"
+                          " usage_period, ai_requests_used, billing_event_at, created_at) VALUES (7, 'acme',"
+                          " 'Organization', 'free', true, false, '', '', '', '[]', '', '', 0, 0, CURRENT_TIMESTAMP)"))
+        conn.execute(text("INSERT INTO pentest_requests (installation_id, requested_by, kind, target, scope,"
+                          " preferred_dates, contact_email, status, report, created_at, updated_at) VALUES (7, 'ana',"
+                          " 'web', 'https://acme.com', '', '', 'a@acme.com', 'requested', '{}', CURRENT_TIMESTAMP,"
+                          " CURRENT_TIMESTAMP)"))
+    db.migrate()
+    with db.session() as s:
+        row = s.query(PentestRequest).one()
+        assert row.notes == "" and row.accepted_at is None
+    assert _diff(db) == []

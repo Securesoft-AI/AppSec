@@ -108,6 +108,16 @@ DATABASE_URL=sqlite:///./dev.db appsec-ai migrate --new "Describe el cambio"
 `tests/test_migrations.py` falla si los modelos y las migraciones no coinciden. Con `TEST_POSTGRES_URL`
 definida también se prueban contra Postgres (el CI lo hace).
 
+## 3d. Pentests: la vista Equipo
+
+Los logins de GitHub del equipo de seguridad van en `STAFF_LOGINS` (separados por comas). Al entrar en el panel
+ven la pestaña **Equipo** con los pentests de todos los clientes: fijan el presupuesto, escriben al cliente,
+cambian el estado y redactan el informe (resumen y hallazgos). El cliente acepta el presupuesto o cancela la
+solicitud desde su pestaña Pentest y, cuando el informe está entregado, lo descarga en PDF. No se puede pasar a
+"Programado" sin que el cliente haya aceptado el presupuesto, y cambiar el importe obliga a aceptarlo de nuevo.
+Quitar un login de `STAFF_LOGINS` le retira el acceso en su siguiente petición. En la demo, el usuario `user`
+ve la vista Equipo solo con los pentests de la organización de ejemplo.
+
 ## 4. Seguridad del propio servicio
 
 - Webhooks verificados con HMAC-SHA256. Sin secreto configurado se rechazan todos.
@@ -137,6 +147,7 @@ definida también se prueban contra Postgres (el CI lo hace).
 | Variable | Obligatoria | Descripción |
 |---|---|---|
 | `DATABASE_URL` | Sí | Postgres en producción (SQLite por defecto en desarrollo) |
+| `STAFF_LOGINS` | No | Logins de GitHub del equipo de seguridad (vista Equipo de pentests) |
 | `GITHUB_APP_ID` | Sí (worker) | ID de la GitHub App |
 | `GITHUB_APP_PRIVATE_KEY` | Sí (worker) | Clave privada PEM |
 | `GITHUB_WEBHOOK_SECRET` | Sí (API) | Secreto de los webhooks |

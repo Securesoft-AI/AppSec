@@ -46,6 +46,9 @@ class Settings:
     stripe_webhook_secret: str = field(default_factory=lambda: _env("STRIPE_WEBHOOK_SECRET"))
     stripe_prices: dict = field(default_factory=lambda: {
         item: _env(f"STRIPE_PRICE_{item.upper()}") for item in PURCHASABLE})
+    # Equipo de seguridad: logins de GitHub que ven la vista Equipo (pentests de todos los clientes).
+    staff_logins: frozenset = field(default_factory=lambda: frozenset(
+        x.strip().lower() for x in _env("STAFF_LOGINS").split(",") if x.strip()))
     # Login de demostración (DEMO_LOGIN=1): usuario y contraseña fijos y una organización de ejemplo.
     # Solo para probar el producto: nunca en un entorno con datos de clientes.
     demo_login: bool = field(default_factory=lambda: _env("DEMO_LOGIN") == "1")

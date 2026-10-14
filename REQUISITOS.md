@@ -166,6 +166,7 @@ Precios iguales en € y $ para simplificar. Hay que validarlos con los design p
 | ✅ 1 | 41 reglas SAST propias; motor de IA con tree-sitter y 15 reglas; validación con código real |
 | ✅ 2 | Backend del SaaS: GitHub App, webhooks, cola, worker, checks y comentarios en PR, Docker |
 | ✅ 3 | Servicios por separado (SAST, SCA, Secretos, IaC, IA, Pentest) con paquetes; panel unificado con vista por servicio, escaneo bajo demanda y solicitud de pentests; login de demo user/pass |
+| ✅ 4 | Migraciones de base de datos (Alembic); vista Equipo para gestionar pentests (presupuesto, aceptación, estado, informe) e informe de pentest en PDF |
 | ✅ 2 | Landing bilingüe (nombre provisional "Atalaya") con lista de espera guardada en el backend y cabeceras de seguridad |
 | 2 | Probar el triage con la API real; conjunto de evaluación; crear la GitHub App y desplegar |
 | 1–2 | Landing bilingüe con lista de espera y precios; reclutar 5–10 design partners entre tus contactos |

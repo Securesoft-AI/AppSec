@@ -74,6 +74,13 @@ def seed(db: Database):
                          "description": "La búsqueda vectorial devuelve documentos de cualquier cliente.",
                          "fix": "Filtrar por tenant en la consulta al vector store."},
                     ]})))
+            # Otro pendiente de que el cliente acepte el presupuesto.
+            s.add(PentestRequest(
+                installation_id=DEMO_INSTALLATION_ID, requested_by="demo", kind="api",
+                target="https://api.demo-org.example", scope="API pública de pedidos (OpenAPI adjunta), roles cliente y admin",
+                preferred_dates="diciembre", contact_email="seguridad@demo-org.example",
+                status=PentestStatus.SCOPING.value, quote_eur=2900,
+                notes="Proponemos 4 días de prueba con dos roles. Podemos empezar el 1 de diciembre."))
     with db.session() as s:
         missing = [rid for rid in DEMO_REPOS if not s.query(Scan).filter_by(repository_id=rid).first()]
     for repo_id in missing:

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import datetime as dt
+import re
+import unicodedata
 from enum import Enum
 from pathlib import Path
 
@@ -132,7 +134,11 @@ class PentestStatus(str, Enum):
 
 
 class PentestRequest(Base):
-    """Pentest manual pedido desde el panel. Lo gestiona el equipo de seguridad (API de administración)."""
+    """Pentest manual pedido desde el panel. Lo gestiona el equipo de seguridad desde la vista Equipo.
+
+    Ciclo: el cliente lo solicita, el equipo concreta alcance y presupuesto, el cliente acepta el presupuesto,
+    el equipo lo programa, lo ejecuta y publica el informe. El cliente puede cancelarlo antes de aceptar.
+    """
 
     __tablename__ = "pentest_requests"
 
@@ -146,6 +152,8 @@ class PentestRequest(Base):
     contact_email: Mapped[str] = mapped_column(String(320))
     status: Mapped[str] = mapped_column(String(20), default=PentestStatus.REQUESTED.value, index=True)
     quote_eur: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    notes: Mapped[str] = mapped_column(Text, default="")            # mensaje del equipo al cliente
+    accepted_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     report: Mapped[dict] = mapped_column(JSON, default=dict)       # resumen y hallazgos (cifrado si hay clave)
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
@@ -252,8 +260,19 @@ class Database:
         head = ScriptDirectory.from_config(cfg).get_current_head()
         with self.engine.begin() as conn:
             cfg.attributes["connection"] = conn
-            script = command.revision(cfg, message=message, autogenerate=True, rev_id=f"{int(head) + 1:04d}")
-        return script.path
+            rev = f"{int(head) + 1:04d}"
+            script = command.revision(cfg, message=message, autogenerate=True, rev_id=rev)
+        # Nombre de fichero en ASCII y sin los comentarios que añade Alembic.
+        src = Path(script.path)
+        slug = re.sub(r"[^a-z0-9]+", "_", unicodedata.normalize("NFKD", message).encode("ascii", "ignore")
+                      .decode().lower()).strip("_")[:40]
+        dest = src.with_name(f"{rev}_{slug}.py")
+        dest.write_text("".join(line for line in src.read_text(encoding="utf-8").splitlines(keepends=True)
+                                if "### commands auto generated" not in line and "### end Alembic" not in line),
+                        encoding="utf-8")
+        if dest != src:
+            src.unlink()
+        return str(dest)
 
 
 def _alembic_config():
