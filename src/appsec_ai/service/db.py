@@ -178,6 +178,48 @@ class FindingFeedback(Base):
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class RedTeamTarget(Base):
+    """Endpoint con LLM del cliente contra el que se puede lanzar red teaming (RF-2.7).
+
+    No se ejecuta nada hasta que `verified_method` demuestra que el dominio es del cliente. Las cabeceras
+    pueden llevar claves de API, así que se guardan cifradas.
+    """
+
+    __tablename__ = "redteam_targets"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    installation_id: Mapped[int] = mapped_column(ForeignKey("installations.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(200), default="")
+    url: Mapped[str] = mapped_column(String(1000))
+    host: Mapped[str] = mapped_column(String(300), index=True)
+    method: Mapped[str] = mapped_column(String(10), default="POST")
+    body_template: Mapped[str] = mapped_column(Text, default='{"input": "{prompt}"}')
+    response_path: Mapped[str] = mapped_column(String(200), default="")
+    headers: Mapped[dict] = mapped_column(JSON, default=dict)      # cifrado si hay clave (puede llevar tokens)
+    verified_method: Mapped[str] = mapped_column(String(10), default="")  # "" | "http" | "dns"
+    verified_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_by: Mapped[str] = mapped_column(String(200), default="")
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class RedTeamRun(Base):
+    """Una ejecución de red teaming sobre un objetivo. Hace también de cola de trabajos (status = queued)."""
+
+    __tablename__ = "redteam_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    target_id: Mapped[int] = mapped_column(ForeignKey("redteam_targets.id", ondelete="CASCADE"), index=True)
+    installation_id: Mapped[int] = mapped_column(ForeignKey("installations.id", ondelete="CASCADE"), index=True)
+    status: Mapped[str] = mapped_column(String(20), default=ScanStatus.QUEUED.value, index=True)
+    requested_by: Mapped[str] = mapped_column(String(200), default="")
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    error: Mapped[str] = mapped_column(Text, default="")
+    summary: Mapped[dict] = mapped_column(JSON, default=dict)      # recuento, no lleva código: sin cifrar
+    result: Mapped[dict | None] = mapped_column(JSON, nullable=True)  # sondas y evidencias (cifrado si hay clave)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    finished_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class WaitlistEntry(Base):
     """Interesados que dejan su email en la landing."""
 
@@ -230,6 +272,9 @@ class Database:
 
     def claim_next_fix(self) -> FixRequest | None:
         return self._claim(FixRequest)
+
+    def claim_next_redteam(self) -> "RedTeamRun | None":
+        return self._claim(RedTeamRun)
 
     def _claim(self, model, **values):
         for _ in range(5):

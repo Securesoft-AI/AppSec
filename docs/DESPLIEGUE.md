@@ -118,6 +118,25 @@ solicitud desde su pestaña Pentest y, cuando el informe está entregado, lo des
 Quitar un login de `STAFF_LOGINS` le retira el acceso en su siguiente petición. En la demo, el usuario `user`
 ve la vista Equipo solo con los pentests de la organización de ejemplo.
 
+## 3e. Red teaming de endpoints con IA (RF-2.7)
+
+El servicio de Seguridad de IA incluye lanzar ataques reales contra un endpoint con LLM ya desplegado del
+cliente: inyección de prompts (directa e indirecta), suplantación de rol, fuga del prompt de sistema,
+exfiltración entre usuarios y jailbreak. Cada sonda trae su propio detector determinista (un canario que el
+modelo solo repite si obedeció, o marcadores de cumplimiento frente a rechazo), así que **no usa la API de
+Claude**.
+
+Como esto envía tráfico de ataque a una URL, antes de ejecutar nada el cliente tiene que demostrar que el
+dominio es suyo publicando el token que le damos, de una de estas formas:
+
+- HTTP: en `https://<host>/.well-known/appsec-ai-challenge.txt`.
+- DNS: un registro TXT `appsec-ai-challenge=<token>`.
+
+Solo se permiten objetivos HTTPS hacia hosts que resuelven a direcciones públicas: nunca IPs privadas,
+`localhost` ni enlaces locales (defensa frente a SSRF contra la red interna del propio servicio). Las
+cabeceras del objetivo (que pueden llevar claves de API) se guardan cifradas. El worker procesa las
+ejecuciones desde la misma cola que los escaneos. La verificación DNS usa `dnspython` si está instalado.
+
 ## 4. Seguridad del propio servicio
 
 - Webhooks verificados con HMAC-SHA256. Sin secreto configurado se rechazan todos.
@@ -148,6 +167,8 @@ ve la vista Equipo solo con los pentests de la organización de ejemplo.
 |---|---|---|
 | `DATABASE_URL` | Sí | Postgres en producción (SQLite por defecto en desarrollo) |
 | `STAFF_LOGINS` | No | Logins de GitHub del equipo de seguridad (vista Equipo de pentests) |
+| `REDTEAM_ENABLED` | No | Red teaming dinámico activado (por defecto sí; `0` para desactivarlo) |
+| `REDTEAM_TIMEOUT` | No | Timeout por petición de red teaming, en segundos (por defecto 30) |
 | `GITHUB_APP_ID` | Sí (worker) | ID de la GitHub App |
 | `GITHUB_APP_PRIVATE_KEY` | Sí (worker) | Clave privada PEM |
 | `GITHUB_WEBHOOK_SECRET` | Sí (API) | Secreto de los webhooks |

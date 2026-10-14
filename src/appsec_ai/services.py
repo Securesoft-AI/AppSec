@@ -46,9 +46,11 @@ SERVICES: dict[str, Service] = {s.key: s for s in [
             engines=("checkov",), categories=("iac",), price_month_eur=19),
     Service("ai", {"es": "Seguridad de IA (OWASP LLM)", "en": "AI security (OWASP LLM)"},
             {"es": "Prompt injection, agentes y herramientas peligrosas, RAG sin control de acceso, secretos en "
-                   "prompts y salida del modelo hacia código, SQL o HTML. Inventario de IA y mapeo a EU AI Act.",
+                   "prompts y salida del modelo hacia código, SQL o HTML. Inventario de IA y mapeo a EU AI Act. "
+                   "Incluye red teaming dinámico de tu endpoint con LLM ya desplegado.",
              "en": "Prompt injection, dangerous agents and tools, RAG without access control, secrets in prompts "
-                   "and model output flowing into code, SQL or HTML. AI inventory and EU AI Act mapping."},
+                   "and model output flowing into code, SQL or HTML. AI inventory and EU AI Act mapping. "
+                   "Includes dynamic red teaming of your deployed LLM endpoint."},
             engines=("ai-security", "opengrep"), categories=("ai",), price_month_eur=49),
     Service("pentest", {"es": "Pentest", "en": "Penetration test"},
             {"es": "Prueba de intrusión manual de nuestro equipo de seguridad sobre web, API, móvil o aplicaciones "

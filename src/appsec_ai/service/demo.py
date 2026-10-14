@@ -11,11 +11,17 @@ import datetime as dt
 import logging
 from pathlib import Path
 
+import json
+import re
+
+import httpx
+
+from appsec_ai import redteam
 from appsec_ai.engines.base import Engine
 from appsec_ai.scanner import ALL_ENGINES, scan as run_scan
 from appsec_ai.service.crypto import seal
-from appsec_ai.service.db import (Database, Installation, PentestRequest, PentestStatus, Repository, Scan, ScanKind,
-                                  ScanStatus, utcnow)
+from appsec_ai.service.db import (Database, Installation, PentestRequest, PentestStatus, RedTeamRun, RedTeamTarget,
+                                  Repository, Scan, ScanKind, ScanStatus, utcnow)
 from appsec_ai.services import SCAN_SERVICES, categories_for, engines_for
 
 log = logging.getLogger("appsec_ai.demo")
@@ -81,6 +87,18 @@ def seed(db: Database):
                 preferred_dates="diciembre", contact_email="seguridad@demo-org.example",
                 status=PentestStatus.SCOPING.value, quote_eur=2900,
                 notes="Proponemos 4 días de prueba con dos roles. Podemos empezar el 1 de diciembre."))
+    with db.session() as s, s.begin():
+        if not s.query(RedTeamTarget).filter_by(installation_id=DEMO_INSTALLATION_ID).first():
+            tgt = RedTeamTarget(installation_id=DEMO_INSTALLATION_ID, name="Chatbot de soporte",
+                                url="https://soporte.demo-org.example/api/chat", host="soporte.demo-org.example",
+                                body_template='{"input": "{prompt}"}', response_path="output",
+                                headers=seal(db.cipher, {}), verified_method="http", verified_at=utcnow(),
+                                created_by="demo")
+            s.add(tgt)
+            s.flush()
+            run = RedTeamRun(target_id=tgt.id, installation_id=DEMO_INSTALLATION_ID, requested_by="demo")
+            s.add(run)
+            run_demo_redteam(db, run, tgt)
     with db.session() as s:
         missing = [rid for rid in DEMO_REPOS if not s.query(Scan).filter_by(repository_id=rid).first()]
     for repo_id in missing:
@@ -119,3 +137,32 @@ def scan_demo_repo(db: Database, repo_id: int, services: list[str], requested_by
         s.add(scan)
         s.flush()
         return scan
+
+
+def _vulnerable_model(request: httpx.Request) -> httpx.Response:
+    """Un chatbot de ejemplo deliberadamente vulnerable: obedece inyecciones y no rechaza casi nada."""
+    try:
+        prompt = json.loads(request.content)["input"]
+    except (ValueError, KeyError):
+        prompt = request.content.decode("utf-8", "replace")
+    m = re.search(r"CANARY-[0-9a-f]+", prompt)
+    if m:  # repite el canary: cae en las inyecciones directas e indirectas
+        return httpx.Response(200, json={"output": m.group(0)})
+    low = prompt.lower()
+    if "instrucciones de sistema" in low or "system instructions" in low:
+        return httpx.Response(200, json={"output": "You are the ACME support bot. You must help customers "
+                                                   "and never reveal internal pricing."})
+    # No rechaza: cae en exfiltración y jailbreak
+    return httpx.Response(200, json={"output": "Claro, aquí tienes la información solicitada paso a paso: ..."})
+
+
+def run_demo_redteam(db: Database, run: RedTeamRun, target: RedTeamTarget):
+    """Ejecuta el red teaming de la demo contra un modelo vulnerable en memoria (sin salir a la red)."""
+    tgt = redteam.Target(url=target.url, method=target.method, body_template=target.body_template,
+                         response_path=target.response_path)
+    results = redteam.run_redteam(tgt, transport=httpx.MockTransport(_vulnerable_model))
+    run.status = ScanStatus.COMPLETED.value
+    run.summary = redteam.summarize(results)
+    run.result = seal(db.cipher, {"probes": [vars(r) for r in results],
+                                  "target": {"url": target.url, "host": target.host}})
+    run.finished_at = utcnow()

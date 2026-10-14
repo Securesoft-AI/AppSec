@@ -26,7 +26,10 @@ from appsec_ai.models import ScanResult
 from appsec_ai.service import dashboard
 from appsec_ai.service.crypto import seal
 from appsec_ai.service.db import (Database, FindingFeedback, FixRequest, Installation, PentestRequest, PentestStatus,
-                                  Repository, Scan, ScanKind, ScanStatus, WaitlistEntry, utcnow)
+                                  RedTeamRun, RedTeamTarget, Repository, Scan, ScanKind, ScanStatus, WaitlistEntry,
+                                  utcnow)
+from appsec_ai.service import ownership
+from appsec_ai import redteam
 from appsec_ai.service.github import GitHubApp, GitHubError
 from appsec_ai.service import demo, plans
 from appsec_ai.services import PURCHASABLE, SCAN_SERVICES, catalog
@@ -108,6 +111,15 @@ class PentestUpdateIn(BaseModel):
     quote_eur: int | None = Field(default=None, ge=0, le=10_000_000)
     notes: str | None = Field(default=None, max_length=5000)
     report: PentestReportIn | None = None
+
+
+class RedTeamTargetIn(BaseModel):
+    name: str = Field(default="", max_length=200)
+    url: str = Field(min_length=4, max_length=1000)
+    method: str = Field(default="POST", pattern="^(POST|GET|PUT)$")
+    body_template: str = Field(default='{"input": "{prompt}"}', max_length=20000)
+    response_path: str = Field(default="", max_length=200, pattern=r"^[A-Za-z0-9_.\-]*$")
+    headers: dict[str, str] = Field(default_factory=dict)
 
 
 class CheckoutIn(BaseModel):
@@ -628,6 +640,120 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
             log.info("pentest %s actualizado por %s: %s", row.id, principal.login, row.status)
             return {**_pentest_summary(row, db.cipher), "installation_id": row.installation_id}
 
+    # -- red teaming dinámico de endpoints con LLM (RF-2.7) ---------------------------------------
+
+    def redteam_plan(s, principal: Principal, installation_id: int) -> Installation:
+        inst = visible_installation(s, principal, installation_id)
+        if not plans.effective_plan(inst).redteam:
+            raise HTTPException(status_code=402, detail="el red teaming va con el servicio de Seguridad de IA")
+        return inst
+
+    def visible_target(s, principal: Principal, installation_id: int, target_id: int) -> RedTeamTarget:
+        redteam_plan(s, principal, installation_id)
+        tgt = s.get(RedTeamTarget, target_id)
+        if tgt is None or tgt.installation_id != installation_id:
+            raise HTTPException(status_code=404, detail="objetivo no encontrado")
+        return tgt
+
+    def _target_token(installation_id: int, host: str) -> str:
+        return ownership.challenge_token(settings.session_secret, installation_id, host)
+
+    def _target_out(tgt: RedTeamTarget) -> dict:
+        return {"id": tgt.id, "name": tgt.name, "url": tgt.url, "host": tgt.host, "method": tgt.method,
+                "body_template": tgt.body_template, "response_path": tgt.response_path,
+                "has_headers": bool(unseal(db.cipher, tgt.headers)),
+                "verified": bool(tgt.verified_method), "verified_method": tgt.verified_method,
+                "token": _target_token(tgt.installation_id, tgt.host),
+                "well_known_path": ownership.WELL_KNOWN, "dns_record": ownership.DNS_PREFIX + _target_token(tgt.installation_id, tgt.host),
+                "created_by": tgt.created_by,
+                "created_at": tgt.created_at.isoformat() if tgt.created_at else None}
+
+    @app.post("/api/installations/{installation_id}/redteam/targets", status_code=201)
+    def create_target(installation_id: int, data: RedTeamTargetIn, principal: Principal = Depends(auth)):
+        host = ownership.normalize_host(data.url)
+        if not host:
+            raise HTTPException(status_code=422, detail="la URL debe ser https y con un host válido")
+        if redteam.PLACEHOLDER not in data.body_template:
+            raise HTTPException(status_code=422, detail="la plantilla del cuerpo debe incluir {prompt}")
+        try:
+            json.loads(data.body_template.replace(redteam.PLACEHOLDER, "x"))
+        except ValueError:
+            raise HTTPException(status_code=422, detail="la plantilla del cuerpo no es JSON válido") from None
+        if not demo.is_demo(installation_id) and not ownership.is_public_host(host):
+            raise HTTPException(status_code=422, detail="el host no resuelve a una dirección pública")
+        with db.session() as s, s.begin():
+            redteam_plan(s, principal, installation_id)
+            tgt = RedTeamTarget(installation_id=installation_id, name=data.name.strip(), url=data.url.strip(),
+                                host=host, method=data.method, body_template=data.body_template,
+                                response_path=data.response_path, headers=seal(db.cipher, data.headers),
+                                created_by=principal.login)
+            s.add(tgt)
+            s.flush()
+            return _target_out(tgt)
+
+    @app.get("/api/installations/{installation_id}/redteam/targets")
+    def list_targets(installation_id: int, principal: Principal = Depends(auth)):
+        with db.session() as s:
+            redteam_plan(s, principal, installation_id)
+            rows = s.scalars(select(RedTeamTarget).where(RedTeamTarget.installation_id == installation_id)
+                             .order_by(RedTeamTarget.id.desc())).all()
+            return [_target_out(t) for t in rows]
+
+    @app.post("/api/installations/{installation_id}/redteam/targets/{target_id}/verify")
+    def verify_target(installation_id: int, target_id: int, principal: Principal = Depends(auth)):
+        with db.session() as s, s.begin():
+            tgt = visible_target(s, principal, installation_id, target_id)
+            token = _target_token(installation_id, tgt.host)
+            method = "http" if demo.is_demo(installation_id) else ownership.verify(tgt.host, token)
+            tgt.verified_method = method
+            tgt.verified_at = utcnow() if method else None
+            if not method:
+                raise HTTPException(status_code=409, detail="no se pudo comprobar la propiedad del dominio todavía")
+            return _target_out(tgt)
+
+    @app.delete("/api/installations/{installation_id}/redteam/targets/{target_id}", status_code=204)
+    def delete_target(installation_id: int, target_id: int, principal: Principal = Depends(auth)):
+        with db.session() as s, s.begin():
+            s.delete(visible_target(s, principal, installation_id, target_id))
+        return Response(status_code=204)
+
+    @app.post("/api/installations/{installation_id}/redteam/targets/{target_id}/runs", status_code=201)
+    def start_redteam(installation_id: int, target_id: int, principal: Principal = Depends(auth)):
+        with db.session() as s, s.begin():
+            tgt = visible_target(s, principal, installation_id, target_id)
+            if not tgt.verified_method:
+                raise HTTPException(status_code=409, detail="verifica la propiedad del dominio antes de lanzarlo")
+            if s.scalars(select(RedTeamRun.id).where(RedTeamRun.target_id == target_id,
+                         RedTeamRun.status.in_([ScanStatus.QUEUED.value, ScanStatus.RUNNING.value]))).first():
+                raise HTTPException(status_code=409, detail="ya hay una ejecución en curso para este objetivo")
+            run = RedTeamRun(target_id=target_id, installation_id=installation_id, requested_by=principal.login)
+            s.add(run)
+            s.flush()
+            run_id = run.id
+        if demo.is_demo(installation_id):
+            with db.session() as s, s.begin():
+                demo.run_demo_redteam(db, s.get(RedTeamRun, run_id), s.get(RedTeamTarget, target_id))
+        with db.session() as s:
+            return _run_out(s.get(RedTeamRun, run_id), db.cipher)
+
+    @app.get("/api/installations/{installation_id}/redteam/runs")
+    def list_redteam_runs(installation_id: int, target_id: int = 0, principal: Principal = Depends(auth)):
+        with db.session() as s:
+            redteam_plan(s, principal, installation_id)
+            q = select(RedTeamRun).where(RedTeamRun.installation_id == installation_id).order_by(RedTeamRun.id.desc())
+            if target_id:
+                q = q.where(RedTeamRun.target_id == target_id)
+            return [_run_out(r, db.cipher, detail=False) for r in s.scalars(q).all()]
+
+    @app.get("/api/installations/{installation_id}/redteam/runs/{run_id}")
+    def get_redteam_run(installation_id: int, run_id: int, principal: Principal = Depends(auth)):
+        with db.session() as s:
+            redteam_plan(s, principal, installation_id)
+            run = s.get(RedTeamRun, run_id)
+            if run is None or run.installation_id != installation_id:
+                raise HTTPException(status_code=404, detail="ejecución no encontrada")
+            return _run_out(run, db.cipher)
+
     # -- planes y facturación (RF-4.5) ------------------------------------------------------------
 
     def visible_installation(s, principal: Principal, installation_id: int) -> Installation:
@@ -744,6 +870,16 @@ def _pentest_summary(row: PentestRequest, cipher=None) -> dict:
             "notes": row.notes, "accepted_at": row.accepted_at.isoformat() if row.accepted_at else None,
             "created_at": row.created_at.isoformat() if row.created_at else None,
             "updated_at": row.updated_at.isoformat() if row.updated_at else None}
+
+
+def _run_out(run: RedTeamRun, cipher=None, detail: bool = True) -> dict:
+    out = {"id": run.id, "target_id": run.target_id, "status": run.status, "summary": run.summary,
+           "requested_by": run.requested_by, "error": run.error,
+           "created_at": run.created_at.isoformat() if run.created_at else None,
+           "finished_at": run.finished_at.isoformat() if run.finished_at else None}
+    if detail:
+        out["result"] = unseal(cipher, run.result) if run.result else None
+    return out
 
 
 def _fix_summary(fix: FixRequest, cipher=None) -> dict:

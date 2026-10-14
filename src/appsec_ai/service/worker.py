@@ -95,6 +95,14 @@ class Worker:
                 log.exception("corrección %s falló", fix.id)
                 self._fail_fix(fix.id, e)
             return True
+        run = self.db.claim_next_redteam()
+        if run is not None:
+            try:
+                self.process_redteam(run.id)
+            except Exception as e:  # noqa: BLE001
+                log.exception("red team %s falló", run.id)
+                self._fail_redteam(run.id, e)
+            return True
         return False
 
     def process(self, scan_id: int):
@@ -251,6 +259,45 @@ class Worker:
                 gh.upsert_comment(repo_name, pr_number, render.fix_comment(pr["url"], len(fixes), lang), render.FIX_MARKER)
             except GitHubError:
                 log.exception("no se pudo comentar el PR de corrección %s", pr["url"])
+
+    def process_redteam(self, run_id: int):
+        """Lanza las sondas de red teaming contra el endpoint ya verificado del cliente (RF-2.7)."""
+        from appsec_ai import redteam
+        from appsec_ai.service.db import RedTeamRun, RedTeamTarget
+
+        with self.db.session() as s:
+            run = s.get(RedTeamRun, run_id)
+            tgt = s.get(RedTeamTarget, run.target_id)
+            if tgt is None:
+                return self._finish_redteam(run_id, summary={}, result=None, error="el objetivo ya no existe")
+            if not tgt.verified_method:  # pudo perder la verificación entre encolar y ejecutar
+                return self._finish_redteam(run_id, summary={}, result=None,
+                                            error="el objetivo no está verificado")
+            target = redteam.Target(url=tgt.url, method=tgt.method, headers=unseal(self.db.cipher, tgt.headers) or {},
+                                    body_template=tgt.body_template, response_path=tgt.response_path,
+                                    timeout=self.settings.redteam_timeout)
+        results = redteam.run_redteam(target)
+        payload = {"probes": [vars(r) for r in results], "target": {"url": tgt.url, "host": tgt.host}}
+        self._finish_redteam(run_id, summary=redteam.summarize(results), result=payload)
+
+    def _finish_redteam(self, run_id: int, summary: dict, result, error: str = ""):
+        from appsec_ai.service.db import RedTeamRun
+
+        with self.db.session() as s, s.begin():
+            run = s.get(RedTeamRun, run_id)
+            run.status = ScanStatus.FAILED.value if error else ScanStatus.COMPLETED.value
+            run.summary, run.error, run.finished_at = summary, error[:2000], utcnow()
+            run.result = seal(self.db.cipher, result) if result else None
+
+    def _fail_redteam(self, run_id: int, error: Exception):
+        from appsec_ai.service.db import RedTeamRun
+
+        with self.db.session() as s, s.begin():
+            run = s.get(RedTeamRun, run_id)
+            retry = run.attempts < MAX_ATTEMPTS
+            run.status = ScanStatus.QUEUED.value if retry else ScanStatus.FAILED.value
+            run.error = str(error)[:2000]
+            run.finished_at = None if retry else utcnow()
 
     def _record_ai_usage(self, installation_id: int, requests: int):
         if requests:

@@ -61,6 +61,9 @@ class Settings:
     scan_timeout: int = field(default_factory=lambda: int(_env("SCAN_TIMEOUT", "900")))
     # Cifrado en reposo de resultados y caché (claves Fernet separadas por comas; la primera cifra).
     data_encryption_key: str = field(default_factory=lambda: _env("DATA_ENCRYPTION_KEY"))
+    # Red teaming (RF-2.7): activado, nº máximo de sondas por ejecución y timeout por petición.
+    redteam_enabled: bool = field(default_factory=lambda: _env("REDTEAM_ENABLED", "1") != "0")
+    redteam_timeout: float = field(default_factory=lambda: float(_env("REDTEAM_TIMEOUT", "30")))
     # Severidad a partir de la cual el check del PR falla.
     fail_on: str = field(default_factory=lambda: _env("FAIL_ON", "high"))
 
