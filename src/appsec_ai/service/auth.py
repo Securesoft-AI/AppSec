@@ -11,7 +11,7 @@ from __future__ import annotations
 import hmac
 import secrets
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from urllib.parse import urlparse
 
 import jwt
@@ -28,19 +28,27 @@ class Principal:
     installations: frozenset[int] = field(default_factory=frozenset)
     admin: bool = False
     via_cookie: bool = False
+    # Equipo de seguridad: "all" = pentests de todos los clientes; "own" = solo de sus instalaciones (demo).
+    staff: str = ""
 
     def can_see(self, installation_id: int | None) -> bool:
         return self.admin or (installation_id is not None and installation_id in self.installations)
+
+    def staff_sees(self, installation_id: int) -> bool:
+        return self.admin or self.staff == "all" or (self.staff == "own" and installation_id in self.installations)
 
 
 def new_state() -> str:
     return secrets.token_urlsafe(24)
 
 
-def encode_session(secret: str, user: dict, installations: list[int]) -> str:
+def encode_session(secret: str, user: dict, installations: list[int], staff: str = "") -> str:
     now = int(time.time())
-    return jwt.encode({"sub": user["login"], "uid": user["id"], "inst": sorted(set(installations)),
-                       "iat": now, "exp": now + SESSION_TTL}, secret, algorithm="HS256")
+    claims = {"sub": user["login"], "uid": user["id"], "inst": sorted(set(installations)),
+              "iat": now, "exp": now + SESSION_TTL}
+    if staff:
+        claims["staff"] = staff
+    return jwt.encode(claims, secret, algorithm="HS256")
 
 
 def decode_session(secret: str, token: str) -> Principal | None:
@@ -48,13 +56,15 @@ def decode_session(secret: str, token: str) -> Principal | None:
         data = jwt.decode(token, secret, algorithms=["HS256"], options={"require": ["exp", "sub"]})
     except jwt.PyJWTError:
         return None
+    staff = data.get("staff", "")
     return Principal(login=data["sub"], installations=frozenset(int(i) for i in data.get("inst", [])),
-                     via_cookie=True)
+                     via_cookie=True, staff=staff if staff in ("all", "own") else "")
 
 
 class Authenticator:
-    def __init__(self, session_secret: str, admin_token: str, public_url: str):
+    def __init__(self, session_secret: str, admin_token: str, public_url: str, staff_logins=frozenset()):
         self.session_secret = session_secret
+        self.staff_logins = staff_logins
         self.admin_token = admin_token
         self.public_origin = _origin(public_url)
 
@@ -66,6 +76,8 @@ class Authenticator:
         principal = decode_session(self.session_secret, token) if token and self.session_secret else None
         if principal is None:
             raise HTTPException(status_code=401, detail="no autorizado")
+        if principal.staff == "all" and principal.login.lower() not in self.staff_logins:
+            principal = replace(principal, staff="")  # retirado de STAFF_LOGINS después del login
         # Defensa adicional frente a CSRF (además de SameSite=Lax): las escrituras con cookie deben
         # venir del propio panel.
         if request.method not in ("GET", "HEAD", "OPTIONS"):

@@ -35,10 +35,23 @@ def main(argv: list[str] | None = None) -> int:
     sv.add_argument("--host", default="0.0.0.0")
     sv.add_argument("--port", type=int, default=8000)
     sub.add_parser("worker", help="Arranca un worker que procesa la cola de escaneos")
+    mg = sub.add_parser("migrate", help="Actualiza el esquema de la base de datos (la API y el worker lo hacen al arrancar)")
+    mg.add_argument("--new", metavar="MENSAJE", help="Genera la migración de los cambios hechos en los modelos")
 
     args = p.parse_args(argv)
     if args.cmd in ("serve", "worker"):
         return run_service(args)
+    if args.cmd == "migrate":
+        from appsec_ai.service.config import get_settings
+        from appsec_ai.service.db import Database
+
+        db = Database(get_settings().database_url)
+        if args.new:
+            print(f"Migración creada: {db.new_migration(args.new)}")
+        else:
+            db.migrate()
+            print("Esquema al día")
+        return 0
     if not args.path.is_dir():
         p.error(f"{args.path} no es un directorio")
 
@@ -122,7 +135,7 @@ def run_service(args) -> int:
     if db.cipher is None:
         logging.getLogger("appsec_ai.worker").warning(
             "DATA_ENCRYPTION_KEY no configurada: resultados y caché se guardan sin cifrar")
-    db.create_all()
+    db.migrate()
     Worker(settings, db, GitHubApp(settings.github_app_id, settings.github_private_key, settings.github_api_url)).run_forever()
     return 0
 

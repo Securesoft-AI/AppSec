@@ -92,6 +92,51 @@ Límites por plan (en `src/appsec_ai/service/plans.py`; el presupuesto de IA es 
 | Team | 20 | Sí | Cada push | 5.000 | Sí | Sí | No |
 | Business | Sin límite | Sí | Cada push | 20.000 | Sí | Sí | Sí |
 
+## 3c. Base de datos y migraciones
+
+La API y el worker aplican las migraciones pendientes al arrancar (con un bloqueo en Postgres para que no
+lo hagan a la vez); también se pueden aplicar a mano con `appsec-ai migrate`. Una base de datos creada por
+una versión anterior, sin migraciones, se completa con las tablas y columnas que le falten y se marca como
+al día.
+
+Al cambiar un modelo de `src/appsec_ai/service/db.py`, genera su migración, revísala y súbela con el cambio:
+
+```bash
+DATABASE_URL=sqlite:///./dev.db appsec-ai migrate --new "Describe el cambio"
+```
+
+`tests/test_migrations.py` falla si los modelos y las migraciones no coinciden. Con `TEST_POSTGRES_URL`
+definida también se prueban contra Postgres (el CI lo hace).
+
+## 3d. Pentests: la vista Equipo
+
+Los logins de GitHub del equipo de seguridad van en `STAFF_LOGINS` (separados por comas). Al entrar en el panel
+ven la pestaña **Equipo** con los pentests de todos los clientes: fijan el presupuesto, escriben al cliente,
+cambian el estado y redactan el informe (resumen y hallazgos). El cliente acepta el presupuesto o cancela la
+solicitud desde su pestaña Pentest y, cuando el informe está entregado, lo descarga en PDF. No se puede pasar a
+"Programado" sin que el cliente haya aceptado el presupuesto, y cambiar el importe obliga a aceptarlo de nuevo.
+Quitar un login de `STAFF_LOGINS` le retira el acceso en su siguiente petición. En la demo, el usuario `user`
+ve la vista Equipo solo con los pentests de la organización de ejemplo.
+
+## 3e. Red teaming de endpoints con IA (RF-2.7)
+
+El servicio de Seguridad de IA incluye lanzar ataques reales contra un endpoint con LLM ya desplegado del
+cliente: inyección de prompts (directa e indirecta), suplantación de rol, fuga del prompt de sistema,
+exfiltración entre usuarios y jailbreak. Cada sonda trae su propio detector determinista (un canario que el
+modelo solo repite si obedeció, o marcadores de cumplimiento frente a rechazo), así que **no usa la API de
+Claude**.
+
+Como esto envía tráfico de ataque a una URL, antes de ejecutar nada el cliente tiene que demostrar que el
+dominio es suyo publicando el token que le damos, de una de estas formas:
+
+- HTTP: en `https://<host>/.well-known/appsec-ai-challenge.txt`.
+- DNS: un registro TXT `appsec-ai-challenge=<token>`.
+
+Solo se permiten objetivos HTTPS hacia hosts que resuelven a direcciones públicas: nunca IPs privadas,
+`localhost` ni enlaces locales (defensa frente a SSRF contra la red interna del propio servicio). Las
+cabeceras del objetivo (que pueden llevar claves de API) se guardan cifradas. El worker procesa las
+ejecuciones desde la misma cola que los escaneos. La verificación DNS usa `dnspython` si está instalado.
+
 ## 4. Seguridad del propio servicio
 
 - Webhooks verificados con HMAC-SHA256. Sin secreto configurado se rechazan todos.
@@ -121,6 +166,9 @@ Límites por plan (en `src/appsec_ai/service/plans.py`; el presupuesto de IA es 
 | Variable | Obligatoria | Descripción |
 |---|---|---|
 | `DATABASE_URL` | Sí | Postgres en producción (SQLite por defecto en desarrollo) |
+| `STAFF_LOGINS` | No | Logins de GitHub del equipo de seguridad (vista Equipo de pentests) |
+| `REDTEAM_ENABLED` | No | Red teaming dinámico activado (por defecto sí; `0` para desactivarlo) |
+| `REDTEAM_TIMEOUT` | No | Timeout por petición de red teaming, en segundos (por defecto 30) |
 | `GITHUB_APP_ID` | Sí (worker) | ID de la GitHub App |
 | `GITHUB_APP_PRIVATE_KEY` | Sí (worker) | Clave privada PEM |
 | `GITHUB_WEBHOOK_SECRET` | Sí (API) | Secreto de los webhooks |

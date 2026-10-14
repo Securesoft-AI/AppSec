@@ -46,6 +46,9 @@ class Settings:
     stripe_webhook_secret: str = field(default_factory=lambda: _env("STRIPE_WEBHOOK_SECRET"))
     stripe_prices: dict = field(default_factory=lambda: {
         item: _env(f"STRIPE_PRICE_{item.upper()}") for item in PURCHASABLE})
+    # Equipo de seguridad: logins de GitHub que ven la vista Equipo (pentests de todos los clientes).
+    staff_logins: frozenset = field(default_factory=lambda: frozenset(
+        x.strip().lower() for x in _env("STAFF_LOGINS").split(",") if x.strip()))
     # Login de demostración (DEMO_LOGIN=1): usuario y contraseña fijos y una organización de ejemplo.
     # Solo para probar el producto: nunca en un entorno con datos de clientes.
     demo_login: bool = field(default_factory=lambda: _env("DEMO_LOGIN") == "1")
@@ -58,6 +61,9 @@ class Settings:
     scan_timeout: int = field(default_factory=lambda: int(_env("SCAN_TIMEOUT", "900")))
     # Cifrado en reposo de resultados y caché (claves Fernet separadas por comas; la primera cifra).
     data_encryption_key: str = field(default_factory=lambda: _env("DATA_ENCRYPTION_KEY"))
+    # Red teaming (RF-2.7): activado, nº máximo de sondas por ejecución y timeout por petición.
+    redteam_enabled: bool = field(default_factory=lambda: _env("REDTEAM_ENABLED", "1") != "0")
+    redteam_timeout: float = field(default_factory=lambda: float(_env("REDTEAM_TIMEOUT", "30")))
     # Severidad a partir de la cual el check del PR falla.
     fail_on: str = field(default_factory=lambda: _env("FAIL_ON", "high"))
 

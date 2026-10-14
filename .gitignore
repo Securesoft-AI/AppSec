@@ -7,3 +7,4 @@ appsec-report.*
 .env
 *.db
 *.sqlite
+build/

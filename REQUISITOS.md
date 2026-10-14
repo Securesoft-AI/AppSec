@@ -78,7 +78,7 @@ Leyenda: ✅ hecho · 🔜 MVP · ⏭ posterior
 - ✅ RF‑2.4b Más reglas: LLM08 (RAG sin filtro de acceso), autorización delegada en el prompt, endpoints sin rate limiting, y Java y Go para IA (Spring AI, LangChain4j, SDK de OpenAI y Anthropic, go-openai, openai-go, anthropic-sdk-go, langchaingo). Validado sin falsos positivos sobre langchain4j-examples, spring-ai-examples y langchaingo (1.086 ficheros, 229 llamadas al LLM reconocidas).
 - ✅ RF‑2.5 Mapeo a MITRE ATLAS (IDs comprobados contra ATLAS v5.6.0), NIST AI RMF y su perfil de IA generativa, ISO 42001 (anexo A) y EU AI Act en el informe. Orientativo; conviene que lo revise un especialista en cumplimiento antes de venderlo como tal.
 - ⏭ RF‑2.6 Modelo de amenazas generado por sistema de IA (flujo de datos, activos, caminos de ataque).
-- ⏭ RF‑2.7 Red teaming dinámico: pruebas automáticas de prompt injection/jailbreak contra el endpoint desplegado.
+- ✅ RF‑2.7 Red teaming dinámico: ataques automáticos (inyección directa e indirecta, suplantación de rol, fuga del prompt de sistema, exfiltración entre usuarios y jailbreak) contra el endpoint con LLM ya desplegado del cliente. Antes de lanzar nada se comprueba que el dominio es del cliente (token en `/.well-known` o registro TXT) y solo se permiten hosts públicos (anti‑SSRF). La detección es determinista (canarios y marcadores), sin depender de la API de Claude. Va con el servicio de Seguridad de IA.
 
 ### M3. Capa de IA (triage y corrección)
 - ✅ RF‑3.1 Veredicto por hallazgo (real / falso positivo / revisar), severidad en contexto, explicación, escenario de ataque y corrección con código.
@@ -166,6 +166,7 @@ Precios iguales en € y $ para simplificar. Hay que validarlos con los design p
 | ✅ 1 | 41 reglas SAST propias; motor de IA con tree-sitter y 15 reglas; validación con código real |
 | ✅ 2 | Backend del SaaS: GitHub App, webhooks, cola, worker, checks y comentarios en PR, Docker |
 | ✅ 3 | Servicios por separado (SAST, SCA, Secretos, IaC, IA, Pentest) con paquetes; panel unificado con vista por servicio, escaneo bajo demanda y solicitud de pentests; login de demo user/pass |
+| ✅ 4 | Migraciones de base de datos (Alembic); vista Equipo para gestionar pentests (presupuesto, aceptación, estado, informe) e informe de pentest en PDF; red teaming dinámico de endpoints con IA (RF‑2.7) |
 | ✅ 2 | Landing bilingüe (nombre provisional "Atalaya") con lista de espera guardada en el backend y cabeceras de seguridad |
 | 2 | Probar el triage con la API real; conjunto de evaluación; crear la GitHub App y desplegar |
 | 1–2 | Landing bilingüe con lista de espera y precios; reclutar 5–10 design partners entre tus contactos |

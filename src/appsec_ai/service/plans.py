@@ -35,6 +35,11 @@ class Plan:
     pdf_report: bool
     compliance: bool               # mapeo a EU AI Act / ISO 42001 / NIST / ATLAS (va con Seguridad de IA)
 
+    @property
+    def redteam(self) -> bool:
+        """Red teaming dinámico (RF-2.7): va con el servicio de Seguridad de IA."""
+        return "ai" in self.services
+
 
 FREE = Plan("free", FREE_SERVICES, 1, False, 7, False, 0, False, False, False)
 

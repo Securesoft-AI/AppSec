@@ -35,7 +35,8 @@ def github_mock():
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     monkeypatch.setenv("ADMIN_API_TOKEN", "admin-token")
-    settings = Settings(database_url=f"sqlite:///{tmp_path / 'db.sqlite'}", session_secret="s" * 64, public_url=PUBLIC)
+    settings = Settings(database_url=f"sqlite:///{tmp_path / 'db.sqlite'}", session_secret="s" * 64, public_url=PUBLIC,
+                        staff_logins=frozenset({"marta"}))
     db = Database(settings.database_url)
     c = TestClient(create_app(settings, db, github=github_mock()), base_url=PUBLIC)
     with db.session() as s, s.begin():
@@ -45,7 +46,7 @@ def client(tmp_path, monkeypatch):
         s.add_all([Repository(id=70, installation_id=7, full_name="acme/shop", default_branch="main"),
                    Repository(id=80, installation_id=8, full_name="free-co/app", default_branch="main")])
     c.cookies.set(SESSION_COOKIE, encode_session(settings.session_secret, {"id": 1, "login": "ana"}, [7, 8]))
-    c.db = db
+    c.db, c.settings = db, settings
     return c
 
 
@@ -94,5 +95,63 @@ def test_pentest_request_lifecycle(client):
     report = {"summary": "2 vulnerabilidades altas", "findings": [{"title": "Prompt injection", "severity": "high"}]}
     client.patch(f"/api/admin/pentests/{pid}", json={"status": "reported", "quote_eur": 3500, "report": report}, headers=ADMIN)
     [p] = client.get("/api/installations/7/pentests").json()
-    assert p["status"] == "reported" and p["quote_eur"] == 3500 and p["report"] == report
+    assert p["status"] == "reported" and p["quote_eur"] == 3500 and p["report"]["summary"] == report["summary"]
+    assert p["report"]["findings"] == [{"title": "Prompt injection", "severity": "high", "description": "", "fix": ""}]
     assert client.get("/api/installations/9/pentests").status_code == 404
+
+
+def test_pentest_quote_acceptance_team_view_and_report_pdf(client):
+    base = "/api/installations/7/pentests"
+    pid = client.post(base, headers=O, json={"kind": "api", "target": "https://api.acme.com",
+                                             "contact_email": "sec@acme.com"}).json()["id"]
+    other = client.post(base, headers=O, json={"kind": "web", "target": "https://acme.com",
+                                               "contact_email": "sec@acme.com"}).json()["id"]
+    # Un cliente no es del equipo.
+    assert client.get("/api/me").json()["staff"] is False
+    assert client.get("/api/admin/pentests").status_code == 403
+    assert client.post(f"{base}/{pid}/accept", headers=O).status_code == 409  # aún sin presupuesto
+
+    customer = client.cookies.get(SESSION_COOKIE)
+    team = encode_session(client.settings.session_secret, {"id": 2, "login": "Marta"}, [], staff="all")
+    client.cookies.set(SESSION_COOKIE, team)
+    assert client.get("/api/me").json()["staff"] is True
+    assert [p["account"] for p in client.get("/api/admin/pentests?status=requested").json()] == ["acme", "acme"]
+    r = client.patch(f"/api/admin/pentests/{pid}", headers=O,
+                     json={"status": "scoping", "quote_eur": 2900, "notes": "4 días, empezamos el lunes"})
+    assert r.status_code == 200 and r.json()["notes"] == "4 días, empezamos el lunes"
+    r = client.patch(f"/api/admin/pentests/{pid}", headers=O, json={"status": "scheduled"})
+    assert r.status_code == 409  # el cliente no ha aceptado
+
+    client.cookies.set(SESSION_COOKIE, customer)
+    assert client.get(f"{base}/{pid}/report.pdf").status_code == 404
+    accepted = client.post(f"{base}/{pid}/accept", headers=O).json()
+    assert accepted["accepted_at"] and accepted["notes"] == "4 días, empezamos el lunes"
+    assert client.post(f"{base}/{pid}/cancel", headers=O).status_code == 409  # aceptado: ya no se cancela aquí
+    assert client.post(f"{base}/{other}/cancel", headers=O).json()["status"] == "cancelled"
+    assert client.post(f"/api/installations/8/pentests/{pid}/accept", headers=O).status_code == 404
+
+    client.cookies.set(SESSION_COOKIE, team)
+    assert client.patch(f"/api/admin/pentests/{pid}", headers=O, json={"status": "in_progress"}).status_code == 200
+    assert client.patch(f"/api/admin/pentests/{pid}", headers=O, json={"status": "reported"}).status_code == 422
+    report = {"summary": "IDOR en /orders", "findings": [
+        {"title": "IDOR en /orders/{id}", "severity": "high", "description": "Otro cliente ve pedidos.", "fix": "Comprobar el dueño."},
+        {"title": "Cabeceras", "severity": "low"}]}
+    assert client.patch(f"/api/admin/pentests/{pid}", headers=O,
+                        json={"report": {**report, "findings": [{"title": "x", "severity": "grave"}]}}).status_code == 422
+    r = client.patch(f"/api/admin/pentests/{pid}", headers=O, json={"status": "reported", "report": report})
+    assert r.status_code == 200 and r.json()["status"] == "reported"
+    # Un presupuesto nuevo hay que volver a aceptarlo.
+    assert client.patch(f"/api/admin/pentests/{other}", headers=O, json={"quote_eur": 1}).json()["accepted_at"] is None
+
+    client.cookies.set(SESSION_COOKIE, customer)
+    [p] = [p for p in client.get(base).json() if p["id"] == pid]
+    assert p["report"]["findings"][0]["fix"] == "Comprobar el dueño."
+    pdf = client.get(f"{base}/{pid}/report.pdf?lang=en")
+    assert pdf.status_code == 200 and pdf.headers["content-type"] == "application/pdf" and pdf.content.startswith(b"%PDF")
+
+
+def test_staff_removed_from_config_loses_team_view(client):
+    client.cookies.set(SESSION_COOKIE, encode_session(client.settings.session_secret, {"id": 3, "login": "luis"}, [],
+                                                      staff="all"))
+    assert client.get("/api/admin/pentests").status_code == 403  # "luis" no está en STAFF_LOGINS
+    assert client.get("/api/me").json()["staff"] is False

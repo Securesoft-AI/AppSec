@@ -25,8 +25,11 @@ from appsec_ai.i18n import localize
 from appsec_ai.models import ScanResult
 from appsec_ai.service import dashboard
 from appsec_ai.service.crypto import seal
-from appsec_ai.service.db import (Database, FindingFeedback, FixRequest, Installation, PentestRequest, Repository,
-                                  Scan, ScanKind, ScanStatus, WaitlistEntry, utcnow)
+from appsec_ai.service.db import (Database, FindingFeedback, FixRequest, Installation, PentestRequest, PentestStatus,
+                                  RedTeamRun, RedTeamTarget, Repository, Scan, ScanKind, ScanStatus, WaitlistEntry,
+                                  utcnow)
+from appsec_ai.service import ownership
+from appsec_ai import redteam
 from appsec_ai.service.github import GitHubApp, GitHubError
 from appsec_ai.service import demo, plans
 from appsec_ai.services import PURCHASABLE, SCAN_SERVICES, catalog
@@ -91,10 +94,32 @@ class PentestIn(BaseModel):
     contact_email: str = Field(max_length=320)
 
 
+class PentestFindingIn(BaseModel):
+    title: str = Field(min_length=1, max_length=300)
+    severity: str = Field(pattern="^(critical|high|medium|low|info)$")
+    description: str = Field(default="", max_length=10000)
+    fix: str = Field(default="", max_length=10000)
+
+
+class PentestReportIn(BaseModel):
+    summary: str = Field(default="", max_length=20000)
+    findings: list[PentestFindingIn] = Field(default_factory=list, max_length=200)
+
+
 class PentestUpdateIn(BaseModel):
     status: str | None = Field(default=None, pattern="^(requested|scoping|scheduled|in_progress|reported|cancelled)$")
-    quote_eur: int | None = Field(default=None, ge=0)
-    report: dict | None = None  # {"summary": str, "findings": [{"title", "severity", "description", "fix"}]}
+    quote_eur: int | None = Field(default=None, ge=0, le=10_000_000)
+    notes: str | None = Field(default=None, max_length=5000)
+    report: PentestReportIn | None = None
+
+
+class RedTeamTargetIn(BaseModel):
+    name: str = Field(default="", max_length=200)
+    url: str = Field(min_length=4, max_length=1000)
+    method: str = Field(default="POST", pattern="^(POST|GET|PUT)$")
+    body_template: str = Field(default='{"input": "{prompt}"}', max_length=20000)
+    response_path: str = Field(default="", max_length=200, pattern=r"^[A-Za-z0-9_.\-]*$")
+    headers: dict[str, str] = Field(default_factory=dict)
 
 
 class CheckoutIn(BaseModel):
@@ -144,7 +169,7 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
     db = db or Database(settings.database_url, Cipher.from_keys(settings.data_encryption_key))
     if db.cipher is None:
         log.warning("DATA_ENCRYPTION_KEY no configurada: los resultados se guardan sin cifrar")
-    db.create_all()
+    db.migrate()
     app = FastAPI(title="appsec-ai", version="0.1.0", docs_url=None, redoc_url=None)
     admin_token = os.environ.get("ADMIN_API_TOKEN", "")
     if settings.demo_login and not settings.session_secret:
@@ -152,7 +177,7 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
 
         # Demo sin configurar: secreto aleatorio por arranque (las sesiones caducan al reiniciar).
         settings.session_secret = _secrets.token_hex(32)
-    auth = Authenticator(settings.session_secret, admin_token, settings.public_url)
+    auth = Authenticator(settings.session_secret, admin_token, settings.public_url, settings.staff_logins)
     github = github or GitHubApp(settings.github_app_id, settings.github_private_key, settings.github_api_url)
     login_enabled = bool(settings.github_client_id and settings.github_client_secret and settings.session_secret)
     secure_cookies = settings.public_url.startswith("https://")
@@ -180,6 +205,12 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
         """Operaciones internas (p. ej. la lista de espera): solo con ADMIN_API_TOKEN."""
         if not principal.admin:
             raise HTTPException(status_code=403, detail="solo administradores")
+
+    def require_staff(principal: Principal = Depends(auth)) -> Principal:
+        """Vista Equipo: el equipo de seguridad (STAFF_LOGINS), el token de administración o la demo."""
+        if not (principal.admin or principal.staff):
+            raise HTTPException(status_code=403, detail="solo el equipo de seguridad")
+        return principal
 
     def visible_repo(s, principal: Principal, repository_id: int) -> Repository:
         repo = s.get(Repository, repository_id)
@@ -218,7 +249,8 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
             raise HTTPException(status_code=502, detail="GitHub no ha validado el login") from None
         resp = RedirectResponse("/app", status_code=302)
         resp.delete_cookie(STATE_COOKIE)
-        resp.set_cookie(SESSION_COOKIE, encode_session(settings.session_secret, user, installations),
+        staff = "all" if user["login"].lower() in settings.staff_logins else ""
+        resp.set_cookie(SESSION_COOKIE, encode_session(settings.session_secret, user, installations, staff),
                         max_age=SESSION_TTL, httponly=True, secure=secure_cookies, samesite="lax")
         log.info("login de %s con %d instalaciones", user["login"], len(installations))
         return resp
@@ -240,7 +272,7 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
             raise HTTPException(status_code=401, detail="usuario o contraseña incorrectos")
         resp = JSONResponse({"status": "ok"})
         resp.set_cookie(SESSION_COOKIE, encode_session(settings.session_secret, {"id": 0, "login": "demo"},
-                                                       [demo.DEMO_INSTALLATION_ID]),
+                                                       [demo.DEMO_INSTALLATION_ID], staff="own"),
                         max_age=SESSION_TTL, httponly=True, secure=secure_cookies, samesite="lax")
         return resp
 
@@ -257,7 +289,7 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
             if not principal.admin:
                 q = q.where(Installation.id.in_(principal.installations))
             rows = s.scalars(q).all()
-            return {"login": principal.login, "admin": principal.admin,
+            return {"login": principal.login, "admin": principal.admin, "staff": bool(principal.admin or principal.staff),
                     "installations": [{"id": r.id, "account": r.account_login, "plan": r.plan,
                                        "language": r.language or settings.language} for r in rows]}
 
@@ -528,29 +560,199 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
                              .order_by(PentestRequest.id.desc())).all()
             return [_pentest_summary(r, db.cipher) for r in rows]
 
-    @app.get("/api/admin/pentests", dependencies=[Depends(require_admin)])
-    def admin_pentests(status: str = ""):
+    def own_pentest(s, principal: Principal, installation_id: int, pentest_id: int) -> PentestRequest:
+        visible_installation(s, principal, installation_id)
+        row = s.get(PentestRequest, pentest_id)
+        if row is None or row.installation_id != installation_id:
+            raise HTTPException(status_code=404, detail="pentest no encontrado")
+        return row
+
+    @app.post("/api/installations/{installation_id}/pentests/{pentest_id}/accept")
+    def accept_pentest_quote(installation_id: int, pentest_id: int, principal: Principal = Depends(auth)):
+        """El cliente acepta el presupuesto; el equipo lo programa después."""
+        with db.session() as s, s.begin():
+            row = own_pentest(s, principal, installation_id, pentest_id)
+            if row.status != PentestStatus.SCOPING.value or row.quote_eur is None or row.accepted_at:
+                raise HTTPException(status_code=409, detail="no hay un presupuesto pendiente de aceptar")
+            row.accepted_at = row.updated_at = utcnow()
+            log.info("presupuesto del pentest %s aceptado por %s", row.id, principal.login)
+            return _pentest_summary(row, db.cipher)
+
+    @app.post("/api/installations/{installation_id}/pentests/{pentest_id}/cancel")
+    def cancel_pentest(installation_id: int, pentest_id: int, principal: Principal = Depends(auth)):
+        """El cliente puede cancelar mientras no haya aceptado el presupuesto."""
+        with db.session() as s, s.begin():
+            row = own_pentest(s, principal, installation_id, pentest_id)
+            if row.status not in (PentestStatus.REQUESTED.value, PentestStatus.SCOPING.value) or row.accepted_at:
+                raise HTTPException(status_code=409, detail="este pentest ya no se puede cancelar desde el panel")
+            row.status, row.updated_at = PentestStatus.CANCELLED.value, utcnow()
+            return _pentest_summary(row, db.cipher)
+
+    @app.get("/api/installations/{installation_id}/pentests/{pentest_id}/report.pdf")
+    def pentest_report_pdf(installation_id: int, pentest_id: int, lang: str = "es",
+                           principal: Principal = Depends(auth)):
+        from appsec_ai.report_pdf import pentest_pdf
+
         with db.session() as s:
-            q = select(PentestRequest).order_by(PentestRequest.id.desc())
+            row = own_pentest(s, principal, installation_id, pentest_id)
+            inst = s.get(Installation, installation_id)
+            report = unseal(db.cipher, row.report) or {}
+            if row.status != PentestStatus.REPORTED.value or not report:
+                raise HTTPException(status_code=404, detail="el informe aún no está disponible")
+            pdf = pentest_pdf(report, lang=lang, account=inst.account_login, target=row.target, kind=row.kind,
+                              scope=row.scope)
+        return Response(pdf, media_type="application/pdf", headers={
+            "Content-Disposition": f'attachment; filename="pentest-{pentest_id}.pdf"'})
+
+    # -- vista Equipo: el equipo de seguridad gestiona los pentests -----------------------------
+
+    @app.get("/api/admin/pentests")
+    def admin_pentests(status: str = "", principal: Principal = Depends(require_staff)):
+        with db.session() as s:
+            q = select(PentestRequest, Installation.account_login).join(Installation).order_by(PentestRequest.id.desc())
             if status:
                 q = q.where(PentestRequest.status == status)
-            return [_pentest_summary(r, db.cipher) for r in s.scalars(q).all()]
+            if not (principal.admin or principal.staff == "all"):
+                q = q.where(PentestRequest.installation_id.in_(principal.installations))
+            return [{**_pentest_summary(r, db.cipher), "installation_id": r.installation_id, "account": account}
+                    for r, account in s.execute(q).all()]
 
-    @app.patch("/api/admin/pentests/{pentest_id}", dependencies=[Depends(require_admin)])
-    def update_pentest(pentest_id: int, data: PentestUpdateIn):
-        """El equipo de seguridad actualiza el estado, el presupuesto y publica el informe."""
+    @app.patch("/api/admin/pentests/{pentest_id}")
+    def update_pentest(pentest_id: int, data: PentestUpdateIn, principal: Principal = Depends(require_staff)):
+        """El equipo concreta el presupuesto, cambia el estado, escribe al cliente y publica el informe."""
         with db.session() as s, s.begin():
             row = s.get(PentestRequest, pentest_id)
-            if row is None:
+            if row is None or not principal.staff_sees(row.installation_id):
                 raise HTTPException(status_code=404, detail="pentest no encontrado")
-            if data.status is not None:
-                row.status = data.status
-            if data.quote_eur is not None:
-                row.quote_eur = data.quote_eur
+            if data.quote_eur is not None and data.quote_eur != row.quote_eur:
+                row.quote_eur, row.accepted_at = data.quote_eur, None  # presupuesto nuevo: hay que volver a aceptarlo
+            if data.notes is not None:
+                row.notes = data.notes.strip()
             if data.report is not None:
-                row.report = seal(db.cipher, data.report)
+                row.report = seal(db.cipher, data.report.model_dump())
+            if data.status is not None and data.status != row.status:
+                if data.status == PentestStatus.REPORTED.value and not (unseal(db.cipher, row.report) or {}).get("summary"):
+                    raise HTTPException(status_code=422, detail="falta el resumen del informe")
+                if data.status in (PentestStatus.SCHEDULED.value, PentestStatus.IN_PROGRESS.value) and not row.accepted_at:
+                    raise HTTPException(status_code=409, detail="el cliente aún no ha aceptado el presupuesto")
+                row.status = data.status
             row.updated_at = utcnow()
-            return _pentest_summary(row, db.cipher)
+            log.info("pentest %s actualizado por %s: %s", row.id, principal.login, row.status)
+            return {**_pentest_summary(row, db.cipher), "installation_id": row.installation_id}
+
+    # -- red teaming dinámico de endpoints con LLM (RF-2.7) ---------------------------------------
+
+    def redteam_plan(s, principal: Principal, installation_id: int) -> Installation:
+        inst = visible_installation(s, principal, installation_id)
+        if not plans.effective_plan(inst).redteam:
+            raise HTTPException(status_code=402, detail="el red teaming va con el servicio de Seguridad de IA")
+        return inst
+
+    def visible_target(s, principal: Principal, installation_id: int, target_id: int) -> RedTeamTarget:
+        redteam_plan(s, principal, installation_id)
+        tgt = s.get(RedTeamTarget, target_id)
+        if tgt is None or tgt.installation_id != installation_id:
+            raise HTTPException(status_code=404, detail="objetivo no encontrado")
+        return tgt
+
+    def _target_token(installation_id: int, host: str) -> str:
+        return ownership.challenge_token(settings.session_secret, installation_id, host)
+
+    def _target_out(tgt: RedTeamTarget) -> dict:
+        return {"id": tgt.id, "name": tgt.name, "url": tgt.url, "host": tgt.host, "method": tgt.method,
+                "body_template": tgt.body_template, "response_path": tgt.response_path,
+                "has_headers": bool(unseal(db.cipher, tgt.headers)),
+                "verified": bool(tgt.verified_method), "verified_method": tgt.verified_method,
+                "token": _target_token(tgt.installation_id, tgt.host),
+                "well_known_path": ownership.WELL_KNOWN, "dns_record": ownership.DNS_PREFIX + _target_token(tgt.installation_id, tgt.host),
+                "created_by": tgt.created_by,
+                "created_at": tgt.created_at.isoformat() if tgt.created_at else None}
+
+    @app.post("/api/installations/{installation_id}/redteam/targets", status_code=201)
+    def create_target(installation_id: int, data: RedTeamTargetIn, principal: Principal = Depends(auth)):
+        host = ownership.normalize_host(data.url)
+        if not host:
+            raise HTTPException(status_code=422, detail="la URL debe ser https y con un host válido")
+        if redteam.PLACEHOLDER not in data.body_template:
+            raise HTTPException(status_code=422, detail="la plantilla del cuerpo debe incluir {prompt}")
+        try:
+            json.loads(data.body_template.replace(redteam.PLACEHOLDER, "x"))
+        except ValueError:
+            raise HTTPException(status_code=422, detail="la plantilla del cuerpo no es JSON válido") from None
+        if not demo.is_demo(installation_id) and not ownership.is_public_host(host):
+            raise HTTPException(status_code=422, detail="el host no resuelve a una dirección pública")
+        with db.session() as s, s.begin():
+            redteam_plan(s, principal, installation_id)
+            tgt = RedTeamTarget(installation_id=installation_id, name=data.name.strip(), url=data.url.strip(),
+                                host=host, method=data.method, body_template=data.body_template,
+                                response_path=data.response_path, headers=seal(db.cipher, data.headers),
+                                created_by=principal.login)
+            s.add(tgt)
+            s.flush()
+            return _target_out(tgt)
+
+    @app.get("/api/installations/{installation_id}/redteam/targets")
+    def list_targets(installation_id: int, principal: Principal = Depends(auth)):
+        with db.session() as s:
+            redteam_plan(s, principal, installation_id)
+            rows = s.scalars(select(RedTeamTarget).where(RedTeamTarget.installation_id == installation_id)
+                             .order_by(RedTeamTarget.id.desc())).all()
+            return [_target_out(t) for t in rows]
+
+    @app.post("/api/installations/{installation_id}/redteam/targets/{target_id}/verify")
+    def verify_target(installation_id: int, target_id: int, principal: Principal = Depends(auth)):
+        with db.session() as s, s.begin():
+            tgt = visible_target(s, principal, installation_id, target_id)
+            token = _target_token(installation_id, tgt.host)
+            method = "http" if demo.is_demo(installation_id) else ownership.verify(tgt.host, token)
+            tgt.verified_method = method
+            tgt.verified_at = utcnow() if method else None
+            if not method:
+                raise HTTPException(status_code=409, detail="no se pudo comprobar la propiedad del dominio todavía")
+            return _target_out(tgt)
+
+    @app.delete("/api/installations/{installation_id}/redteam/targets/{target_id}", status_code=204)
+    def delete_target(installation_id: int, target_id: int, principal: Principal = Depends(auth)):
+        with db.session() as s, s.begin():
+            s.delete(visible_target(s, principal, installation_id, target_id))
+        return Response(status_code=204)
+
+    @app.post("/api/installations/{installation_id}/redteam/targets/{target_id}/runs", status_code=201)
+    def start_redteam(installation_id: int, target_id: int, principal: Principal = Depends(auth)):
+        with db.session() as s, s.begin():
+            tgt = visible_target(s, principal, installation_id, target_id)
+            if not tgt.verified_method:
+                raise HTTPException(status_code=409, detail="verifica la propiedad del dominio antes de lanzarlo")
+            if s.scalars(select(RedTeamRun.id).where(RedTeamRun.target_id == target_id,
+                         RedTeamRun.status.in_([ScanStatus.QUEUED.value, ScanStatus.RUNNING.value]))).first():
+                raise HTTPException(status_code=409, detail="ya hay una ejecución en curso para este objetivo")
+            run = RedTeamRun(target_id=target_id, installation_id=installation_id, requested_by=principal.login)
+            s.add(run)
+            s.flush()
+            run_id = run.id
+        if demo.is_demo(installation_id):
+            with db.session() as s, s.begin():
+                demo.run_demo_redteam(db, s.get(RedTeamRun, run_id), s.get(RedTeamTarget, target_id))
+        with db.session() as s:
+            return _run_out(s.get(RedTeamRun, run_id), db.cipher)
+
+    @app.get("/api/installations/{installation_id}/redteam/runs")
+    def list_redteam_runs(installation_id: int, target_id: int = 0, principal: Principal = Depends(auth)):
+        with db.session() as s:
+            redteam_plan(s, principal, installation_id)
+            q = select(RedTeamRun).where(RedTeamRun.installation_id == installation_id).order_by(RedTeamRun.id.desc())
+            if target_id:
+                q = q.where(RedTeamRun.target_id == target_id)
+            return [_run_out(r, db.cipher, detail=False) for r in s.scalars(q).all()]
+
+    @app.get("/api/installations/{installation_id}/redteam/runs/{run_id}")
+    def get_redteam_run(installation_id: int, run_id: int, principal: Principal = Depends(auth)):
+        with db.session() as s:
+            redteam_plan(s, principal, installation_id)
+            run = s.get(RedTeamRun, run_id)
+            if run is None or run.installation_id != installation_id:
+                raise HTTPException(status_code=404, detail="ejecución no encontrada")
+            return _run_out(run, db.cipher)
 
     # -- planes y facturación (RF-4.5) ------------------------------------------------------------
 
@@ -665,8 +867,19 @@ def _pentest_summary(row: PentestRequest, cipher=None) -> dict:
     return {"id": row.id, "kind": row.kind, "target": row.target, "scope": row.scope,
             "preferred_dates": row.preferred_dates, "contact_email": row.contact_email, "status": row.status,
             "quote_eur": row.quote_eur, "requested_by": row.requested_by, "report": unseal(cipher, row.report) or {},
+            "notes": row.notes, "accepted_at": row.accepted_at.isoformat() if row.accepted_at else None,
             "created_at": row.created_at.isoformat() if row.created_at else None,
             "updated_at": row.updated_at.isoformat() if row.updated_at else None}
+
+
+def _run_out(run: RedTeamRun, cipher=None, detail: bool = True) -> dict:
+    out = {"id": run.id, "target_id": run.target_id, "status": run.status, "summary": run.summary,
+           "requested_by": run.requested_by, "error": run.error,
+           "created_at": run.created_at.isoformat() if run.created_at else None,
+           "finished_at": run.finished_at.isoformat() if run.finished_at else None}
+    if detail:
+        out["result"] = unseal(cipher, run.result) if run.result else None
+    return out
 
 
 def _fix_summary(fix: FixRequest, cipher=None) -> dict:
