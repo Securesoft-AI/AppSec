@@ -168,3 +168,21 @@ def test_no_auto_when_toggle_off(ctx):
     worker._auto_export(7, [f.model_dump(mode="json") for f in ctx.result.findings], "acme/app", "es")
     with ctx.db.session() as s:
         assert s.query(IntegrationExport).count() == 0
+
+
+def test_markdown_from_code_is_inert():
+    from appsec_ai.service.gitlab import finding_markdown
+    evil = {"file": "a`b\n/close.py", "line": 3, "rule_id": "r", "severity": "high",
+            "message": "ver [aquí](https://phish.example) ![x](https://t.example/p.png) @todos\n/confidential",
+            "triage": {"exploit_scenario": "<img src=x onerror=alert(1)>", "fix": "/assign @atacante"}}
+    md = finding_markdown(evil, "acme/app")
+    assert "](" not in md and "<img" not in md.replace("\\<img", "")   # enlaces, imágenes y HTML escapados
+    assert all(not line.startswith("/") for line in md.splitlines())
+    assert "@todos" not in md and "@atacante" not in md
+    assert "`a b /close.py:3`" in md
+
+
+def test_issue_url_must_be_https(monkeypatch):
+    from appsec_ai.service import integrations
+    monkeypatch.setattr(integrations, "_create", lambda *a: {"key": "#1", "url": "javascript:alert(1)"})
+    assert integrations.create_issue("gitlab", {}, {}, "r", "es") == {"key": "#1", "url": ""}

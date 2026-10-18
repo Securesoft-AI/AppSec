@@ -16,7 +16,7 @@ import jwt
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 
 from appsec_ai.service.auth import SESSION_COOKIE, SESSION_TTL, STATE_COOKIE, Authenticator, Principal, encode_session, new_state
@@ -126,6 +126,19 @@ class RedTeamTargetIn(BaseModel):
     body_template: str = Field(default='{"input": "{prompt}"}', max_length=20000)
     response_path: str = Field(default="", max_length=200, pattern=r"^[A-Za-z0-9_.\-]*$")
     headers: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("headers")
+    @classmethod
+    def _safe_headers(cls, v: dict[str, str]) -> dict[str, str]:
+        if len(v) > 20:
+            raise ValueError("como máximo 20 cabeceras")
+        for name, value in v.items():
+            if name.strip().lower() in redteam.FORBIDDEN_HEADERS or name.lower().startswith("proxy-"):
+                raise ValueError(f"la cabecera {name} no se puede fijar")
+            if not re.fullmatch(r"[A-Za-z0-9!#$%&'*+.^_`|~-]{1,100}", name) or len(value) > 4000 \
+                    or "\n" in value or "\r" in value:
+                raise ValueError(f"cabecera no válida: {name[:100]}")
+        return v
 
 
 class NotificationsIn(BaseModel):
@@ -245,6 +258,11 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
     def principal_lang(inst: Installation | None) -> str:
         return "en" if ((inst.language if inst else "") or settings.language) == "en" else "es"
     login_limiter = RateLimiter(limit=10, window_seconds=300)
+    sso_limiter = RateLimiter(limit=20, window_seconds=300)
+
+    def demo_on(installation_id: int) -> bool:
+        """La organización de ejemplo solo tiene sus atajos (sin red real) con DEMO_LOGIN activo."""
+        return settings.demo_login and demo.is_demo(installation_id)
     if settings.demo_login:
         log.warning("MODO DEMO ACTIVO: login %s/**** con una organización de ejemplo. No usar con datos reales.",
                     settings.demo_user)
@@ -336,13 +354,19 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
             rows = [(inst.id, inst.oidc_config) for inst in s.scalars(select(Installation)).all() if inst.oidc_config]
         return [(inst_id, cfg) for inst_id, sealed in rows if (cfg := unseal(db.cipher, sealed) or {})]
 
-    def _sso_token(installation_id: int, domain: str) -> str:
-        return ownership.challenge_token(settings.session_secret, installation_id, "sso:" + domain)
+    def _sso_token(installation_id: int, domain: str, cfg: dict) -> str:
+        # Ligado también al proveedor: si alguien cambia el issuer o el client_id, el TXT antiguo ya no sirve y
+        # hace falta que quien controla el DNS del dominio apruebe el nuevo.
+        idp = f"{cfg.get('issuer', '')}|{cfg.get('client_id', '')}"
+        return ownership.challenge_token(settings.session_secret, installation_id, f"sso:{domain}:{idp}")
 
     @app.post("/auth/sso/start", include_in_schema=False)
-    def sso_start(data: SsoStartIn):
+    def sso_start(data: SsoStartIn, request: Request):
         if not sso_enabled:
             raise HTTPException(status_code=404, detail="no disponible")
+        ip = request.client.host if request.client else "?"
+        if not sso_limiter.allow(ip):
+            raise HTTPException(status_code=429, detail="demasiados intentos")
         email = data.email.strip().lower()
         installation_id, cfg = _find_sso_installation(email)
         if not installation_id:
@@ -836,7 +860,7 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
             json.loads(data.body_template.replace(redteam.PLACEHOLDER, "x"))
         except ValueError:
             raise HTTPException(status_code=422, detail="la plantilla del cuerpo no es JSON válido") from None
-        if not demo.is_demo(installation_id) and not ownership.is_public_host(host):
+        if not demo_on(installation_id) and not ownership.is_public_host(host):
             raise HTTPException(status_code=422, detail="el host no resuelve a una dirección pública")
         with db.session() as s, s.begin():
             redteam_plan(s, principal, installation_id)
@@ -862,7 +886,7 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
         with db.session() as s, s.begin():
             tgt = visible_target(s, principal, installation_id, target_id)
             token = _target_token(installation_id, tgt.host)
-            method = "http" if demo.is_demo(installation_id) else ownership.verify(tgt.host, token)
+            method = "http" if demo_on(installation_id) else ownership.verify(tgt.host, token)
             tgt.verified_method = method
             tgt.verified_at = utcnow() if method else None
             if not method:
@@ -889,12 +913,15 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
                          RedTeamRun.status.in_([ScanStatus.QUEUED.value, ScanStatus.RUNNING.value]))).first():
                 raise HTTPException(status_code=409, detail="ya hay una ejecución en curso para este objetivo")
             run = RedTeamRun(target_id=target_id, installation_id=installation_id, requested_by=principal.login)
+            if demo.is_demo(installation_id):
+                # La demo se resuelve en memoria y en esta misma transacción: nunca llega a la cola del worker,
+                # que la lanzaría contra la URL real.
+                run.status = ScanStatus.RUNNING.value
             s.add(run)
             s.flush()
             run_id = run.id
-        if demo.is_demo(installation_id):
-            with db.session() as s, s.begin():
-                demo.run_demo_redteam(db, s.get(RedTeamRun, run_id), s.get(RedTeamTarget, target_id))
+            if demo.is_demo(installation_id):
+                demo.run_demo_redteam(db, run, tgt)
         db.audit(installation_id, principal.login, "redteam.run_started", str(target_id), {"run": run_id})
         with db.session() as s:
             return _run_out(s.get(RedTeamRun, run_id), db.cipher)
@@ -1067,6 +1094,8 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
     @app.patch("/api/installations/{installation_id}/bitbucket")
     def set_bitbucket(installation_id: int, data: BitbucketConfigIn, principal: Principal = Depends(auth)):
         vals = [data.workspace.strip(), data.repo.strip(), data.username.strip(), data.app_password.strip()]
+        if any(v and not re.fullmatch(r"[A-Za-z0-9_.-]+", v) or v in (".", "..") for v in vals[:2]):
+            raise HTTPException(status_code=422, detail="workspace y repo solo admiten letras, números, '.', '_' y '-'")
         if any(vals) and not all(vals):
             raise HTTPException(status_code=422, detail="faltan datos de Bitbucket (workspace, repo, usuario y app password)")
         cfg = {"workspace": vals[0], "repo": vals[1], "username": vals[2], "app_password": vals[3],
@@ -1104,7 +1133,7 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
         domains = cfg.get("domains", [])
         return {"configured": bool(cfg), "issuer": cfg.get("issuer", ""), "client_id": cfg.get("client_id", ""),
                 "domains": domains, "verified": [d for d in domains if d in cfg.get("verified", [])],
-                "dns_records": {d: ownership.DNS_PREFIX + _sso_token(installation_id, d) for d in domains}}
+                "dns_records": {d: ownership.DNS_PREFIX + _sso_token(installation_id, d, cfg) for d in domains}}
 
     @app.patch("/api/installations/{installation_id}/sso")
     def set_sso(installation_id: int, data: SsoConfigIn, principal: Principal = Depends(auth)):
@@ -1118,10 +1147,12 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
         with db.session() as s, s.begin():
             inst = visible_installation(s, principal, installation_id)
             previous = unseal(db.cipher, inst.oidc_config) or {}
-            # Los dominios ya verificados se conservan mientras sigan en la lista.
+            # Los dominios verificados se conservan mientras sigan en la lista y el proveedor sea el mismo:
+            # cambiar el issuer o el client_id obliga a verificar de nuevo (quien controla el DNS lo aprueba).
+            same_idp = previous.get("issuer") == issuer and previous.get("client_id") == data.client_id.strip()
+            kept = [d for d in previous.get("verified", []) if d in domains] if same_idp else []
             cfg = {"issuer": issuer, "client_id": data.client_id.strip(), "client_secret": data.client_secret.strip(),
-                   "domains": domains, "verified": [d for d in previous.get("verified", []) if d in domains]} \
-                if all(filled) else {}
+                   "domains": domains, "verified": kept} if all(filled) else {}
             inst.oidc_config = seal(db.cipher, cfg) if cfg else {}
             db.audit(installation_id, principal.login, "sso.changed", issuer,
                      {"configured": bool(cfg), "domains": domains}, session=s)
@@ -1140,13 +1171,15 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
             raise HTTPException(status_code=404, detail="ese dominio no está en la configuración de SSO")
         if any(domain in other.get("verified", []) for inst_id, other in _sso_configs() if inst_id != installation_id):
             raise HTTPException(status_code=409, detail="ese dominio ya está verificado por otra organización")
-        record = ownership.DNS_PREFIX + _sso_token(installation_id, domain)
-        if domain not in cfg.get("verified", []) and not ownership.verify_dns(domain, _sso_token(installation_id, domain)):
+        token = _sso_token(installation_id, domain, cfg)
+        record = ownership.DNS_PREFIX + token
+        if domain not in cfg.get("verified", []) and not ownership.verify_dns(domain, token):
             raise HTTPException(status_code=422, detail=f"no encontramos el registro TXT {record} en {domain}")
         with db.session() as s, s.begin():
             inst = visible_installation(s, principal, installation_id)
             cfg = unseal(db.cipher, inst.oidc_config) or {}
-            if domain in cfg.get("domains", []) and domain not in cfg.get("verified", []):
+            same = _sso_token(installation_id, domain, cfg) == token   # no cambió el proveedor entre medias
+            if same and domain in cfg.get("domains", []) and domain not in cfg.get("verified", []):
                 cfg["verified"] = sorted({*cfg.get("verified", []), domain})
                 inst.oidc_config = seal(db.cipher, cfg)
                 db.audit(installation_id, principal.login, "sso.domain_verified", domain, session=s)

@@ -178,10 +178,18 @@ def _dump(value) -> str:
         return str(value)
 
 
+# Cabeceras que el cliente no puede fijar: Host permitiría enrutar las sondas a otro sitio del mismo CDN que el
+# dominio verificado, y las de framing romperían la petición.
+FORBIDDEN_HEADERS = {"host", "content-length", "transfer-encoding", "connection", "content-type", "upgrade", "te",
+                     "trailer", "keep-alive", "expect"}
+
+
 def send_probe(client: httpx.Client, target: Target, prompt: str) -> str:
     """Envía un prompt al endpoint y devuelve el texto de la respuesta del modelo."""
     body = target.body_template.replace(PLACEHOLDER, _json_escape(prompt))
-    headers = {"Content-Type": "application/json", **target.headers}
+    custom = {k: v for k, v in target.headers.items()
+              if k.strip().lower() not in FORBIDDEN_HEADERS and not k.lower().startswith("proxy-")}
+    headers = {"Content-Type": "application/json", **custom}
     r = client.request(target.method, target.url, content=body.encode("utf-8"), headers=headers,
                        timeout=target.timeout)
     r.raise_for_status()

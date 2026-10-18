@@ -10,6 +10,7 @@ El cliente HTTP es inyectable para los tests (httpx.MockTransport).
 from __future__ import annotations
 
 import logging
+import re
 from urllib.parse import quote
 
 import httpx
@@ -57,20 +58,38 @@ class Gitlab:
         return {"key": f"#{body.get('iid', '')}", "url": body.get("web_url", "")}
 
 
+_MD_SPECIAL = re.compile(r"([\\`*_{}\[\]()#+!|<>~=-])")
+
+
+def md_text(value) -> str:
+    """Texto no confiable como Markdown inerte: sin enlaces, imágenes, menciones, HTML ni quick actions.
+
+    El mensaje, el escenario y la corrección pueden venir del código del cliente o de la IA que lo leyó, así que
+    se escapan, se rompen las menciones (@) y cada línea va citada (`> `) para que ninguna empiece por `/`.
+    """
+    text = _MD_SPECIAL.sub(r"\\\1", str(value or "")).replace("@", "@\u200b")
+    return "\n".join("> " + line for line in text.splitlines() or [""])
+
+
+def md_code(value) -> str:
+    """Valor corto (ruta, regla) dentro de `código`: sin acentos graves ni saltos de línea que lo rompan."""
+    return "`" + re.sub(r"[`\r\n]", " ", str(value or ""))[:300] + "`"
+
+
 def finding_markdown(finding: dict, repo: str, lang: str = "es") -> str:
     es = lang != "en"
     loc = (f"{finding.get('file', '')}:{finding.get('line', 0)}").strip(":")
     triage = finding.get("triage") or {}
     lines = [
-        f"**{'Repositorio' if es else 'Repository'}:** {repo}",
-        f"**{'Ubicación' if es else 'Location'}:** `{loc}`  ·  **{'Regla' if es else 'Rule'}:** `{finding.get('rule_id', '')}`",
-        f"**{'Severidad' if es else 'Severity'}:** {finding.get('severity', '')}",
+        f"**{'Repositorio' if es else 'Repository'}:** {md_code(repo)}",
+        f"**{'Ubicación' if es else 'Location'}:** {md_code(loc)}  ·  **{'Regla' if es else 'Rule'}:** {md_code(finding.get('rule_id', ''))}",
+        f"**{'Severidad' if es else 'Severity'}:** {md_code(finding.get('severity', ''))}",
         "",
-        finding.get("message") or finding.get("title") or "",
+        md_text(finding.get("message") or finding.get("title") or ""),
     ]
     if triage.get("exploit_scenario"):
-        lines += ["", f"**{'Escenario de ataque' if es else 'Attack scenario'}:** {triage['exploit_scenario']}"]
+        lines += ["", f"**{'Escenario de ataque' if es else 'Attack scenario'}:**", md_text(triage["exploit_scenario"])]
     if triage.get("fix"):
-        lines += ["", f"**{'Corrección' if es else 'Fix'}:** {triage['fix']}"]
+        lines += ["", f"**{'Corrección' if es else 'Fix'}:**", md_text(triage["fix"])]
     lines += ["", "— Atalaya (appsec-ai)"]
     return "\n".join(lines)

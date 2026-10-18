@@ -166,6 +166,11 @@ ejecuciones desde la misma cola que los escaneos. La verificación DNS usa `dnsp
   (firma RS256 contra el JWKS del proveedor, emisor, público, caducidad y nonce) y que el email está
   verificado y su dominio permitido. La sesión queda limitada a esa organización. El secreto se guarda
   cifrado. Requiere `SESSION_SECRET` configurado. Soporta OIDC; SAML queda pendiente.
+  El proveedor tiene que enviar `email_verified: true` (sin ese claim no se entra). En Microsoft Entra ID
+  añade el claim opcional `email` y usa usuarios con el email verificado. Cada dominio se verifica con un
+  registro DNS TXT ligado al issuer y al client_id: si alguien cambia el proveedor, los dominios dejan de
+  estar verificados hasta que quien controla el DNS publique el registro nuevo. `/auth/sso/start` tiene un
+  límite de peticiones por IP, y las respuestas del proveedor, un tamaño y un plazo máximos.
 - **Registros de auditoría** (RF-4.8): cada acción sensible (inicio de sesión, escaneo solicitado, cambios en
   pentests y red team, facturación y ajustes) se guarda en la tabla `audit_log`, que es de solo añadir: la
   aplicación no tiene ningún endpoint para modificar ni borrar entradas. Cada organización ve su propia

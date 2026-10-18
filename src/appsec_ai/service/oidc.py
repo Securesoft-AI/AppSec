@@ -12,12 +12,13 @@ from __future__ import annotations
 
 import json
 import secrets
+import time
 
 import httpx
-
-from appsec_ai.egress import safe_transport
 import jwt
 from jwt.algorithms import RSAAlgorithm
+
+from appsec_ai.egress import safe_transport
 
 
 class OIDCError(RuntimeError):
@@ -28,19 +29,45 @@ def _client(transport: httpx.BaseTransport | None) -> httpx.Client:
     return httpx.Client(transport=transport or safe_transport(), timeout=15, trust_env=False, follow_redirects=False)
 
 
+MAX_BYTES = 256 * 1024     # tope de tamaño de las respuestas del proveedor
+DEADLINE = 15.0            # plazo total por respuesta (el timeout de httpx es por lectura)
+CACHE_TTL = 600
+_discovery_cache: dict[str, tuple[float, dict]] = {}
+
+
+def _read_json(c: httpx.Client, method: str, url: str, **kw) -> dict:
+    """Respuesta JSON con tamaño y plazo totales acotados: un IdP lento o enorme no bloquea el servidor."""
+    start = time.monotonic()
+    with c.stream(method, url, **kw) as r:
+        r.raise_for_status()
+        body = bytearray()
+        for chunk in r.iter_bytes():
+            body += chunk
+            if len(body) > MAX_BYTES or time.monotonic() - start > DEADLINE:
+                raise ValueError("respuesta del proveedor demasiado grande o lenta")
+    data = json.loads(bytes(body))
+    if not isinstance(data, dict):
+        raise ValueError("respuesta del proveedor no es un objeto JSON")
+    return data
+
+
 def discover(issuer: str, transport: httpx.BaseTransport | None = None) -> dict:
-    """Metadatos del proveedor (.well-known/openid-configuration)."""
+    """Metadatos del proveedor (.well-known/openid-configuration), en caché unos minutos."""
+    cached = _discovery_cache.get(issuer)
+    if cached and time.monotonic() - cached[0] < CACHE_TTL and transport is None:
+        return cached[1]
     url = issuer.rstrip("/") + "/.well-known/openid-configuration"
     try:
         with _client(transport) as c:
-            r = c.get(url)
-        r.raise_for_status()
-        meta = r.json()
+            meta = _read_json(c, "GET", url)
     except (httpx.HTTPError, ValueError) as e:
         raise OIDCError(f"no se pudo leer la configuración del proveedor: {type(e).__name__}") from None
     for key in ("authorization_endpoint", "token_endpoint", "jwks_uri"):
-        if not meta.get(key):
-            raise OIDCError(f"el proveedor no expone {key}")
+        # Solo https: un endpoint javascript: o http: no debe llegar nunca al navegador ni al servidor.
+        if not isinstance(meta.get(key), str) or not meta[key].startswith("https://"):
+            raise OIDCError(f"el proveedor no expone {key} con https")
+    if transport is None:
+        _discovery_cache[issuer] = (time.monotonic(), meta)
     return meta
 
 
@@ -59,12 +86,12 @@ def exchange_code(meta: dict, client_id: str, client_secret: str, code: str, red
             "client_id": client_id, "client_secret": client_secret}
     try:
         with _client(transport) as c:
-            r = c.post(meta["token_endpoint"], data=data, headers={"Accept": "application/json"})
-    except httpx.HTTPError as e:
+            body = _read_json(c, "POST", meta["token_endpoint"], data=data, headers={"Accept": "application/json"})
+    except httpx.HTTPStatusError as e:
+        raise OIDCError(f"el proveedor rechazó el código ({e.response.status_code})") from None
+    except (httpx.HTTPError, ValueError) as e:
         raise OIDCError(f"fallo al canjear el código: {type(e).__name__}") from None
-    if r.status_code >= 300:
-        raise OIDCError(f"el proveedor rechazó el código ({r.status_code})")
-    token = r.json().get("id_token")
+    token = body.get("id_token")
     if not token:
         raise OIDCError("el proveedor no devolvió id_token")
     return token
@@ -83,7 +110,7 @@ def verify_id_token(token: str, meta: dict, client_id: str, issuer: str, nonce: 
     """Verifica firma, iss, aud, exp y nonce, y devuelve las reclamaciones."""
     try:
         with _client(transport) as c:
-            jwks = c.get(meta["jwks_uri"]).json()
+            jwks = _read_json(c, "GET", meta["jwks_uri"])
     except (httpx.HTTPError, ValueError) as e:
         raise OIDCError(f"no se pudo leer el JWKS del proveedor: {type(e).__name__}") from None
     try:
@@ -101,7 +128,7 @@ def allowed_email(claims: dict, domains: list[str]) -> str:
     email = (claims.get("email") or "").strip().lower()
     if not email or "@" not in email:
         return ""
-    if claims.get("email_verified") is False:   # si el proveedor lo marca falso, no entra
+    if claims.get("email_verified") is not True:   # sin verificar (o sin el claim), no entra
         return ""
     domain = email.rsplit("@", 1)[1]
     return email if domain in {d.strip().lower() for d in domains if d.strip()} else ""

@@ -297,9 +297,13 @@ class Worker:
         from appsec_ai.egress import safe_transport
         from appsec_ai.service.db import RedTeamRun, RedTeamTarget
 
+        from appsec_ai.service import demo
+
         with self.db.session() as s:
             run = s.get(RedTeamRun, run_id)
             installation_id = run.installation_id
+            if demo.is_demo(installation_id):  # la demo nunca sale a la red: se resuelve en la API
+                return self._finish_redteam(run_id, summary={}, result=None, error="la demo no lanza ataques reales")
             tgt = s.get(RedTeamTarget, run.target_id)
             if tgt is None:
                 return self._finish_redteam(run_id, summary={}, result=None, error="el objetivo ya no existe")

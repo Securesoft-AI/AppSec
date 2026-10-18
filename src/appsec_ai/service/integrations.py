@@ -33,6 +33,13 @@ def _summary(finding: dict, repo: str) -> str:
 
 def create_issue(provider: str, cfg: dict, finding: dict, repo: str, lang: str) -> dict:
     """Crea la incidencia en el destino y devuelve {key, url}. Lanza IntegrationError si falla."""
+    issue = _create(provider, cfg, finding, repo, lang)
+    # La URL la devuelve un servidor que configuró el cliente: solo se enlaza si es https.
+    url = str(issue.get("url") or "")
+    return {"key": str(issue.get("key") or "")[:100], "url": url if url.startswith("https://") else ""}
+
+
+def _create(provider: str, cfg: dict, finding: dict, repo: str, lang: str) -> dict:
     try:
         if provider == "jira":
             client = Jira(cfg["base_url"], cfg["email"], cfg["token"])

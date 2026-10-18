@@ -182,3 +182,43 @@ def test_callback_rejects_bad_state(ctx, monkeypatch):
     ctx.post("/auth/sso/start", json={"email": "ana@acme.com"})
     bad = ctx.get("/auth/sso/callback", params={"code": "abc", "state": "equivocado"}, follow_redirects=False)
     assert bad.status_code == 400
+
+
+def test_changing_the_idp_requires_verifying_again(ctx, monkeypatch):
+    ctx.patch("/api/installations/7/sso", headers=O, json=SSO)
+    old_record = ctx.get("/api/installations/7/sso").json()["dns_records"]["acme.com"]
+    verify_domain(ctx, monkeypatch)
+    # Un miembro cambia el issuer a su propio IdP: el dominio deja de estar verificado...
+    r = ctx.patch("/api/installations/7/sso", headers=O, json={**SSO, "issuer": "https://idp.atacante.example"}).json()
+    assert r["verified"] == [] and r["dns_records"]["acme.com"] != old_record
+    # ...y el TXT que ya estaba publicado no le sirve para volver a verificarlo.
+    monkeypatch.setattr(ownership, "verify_dns", lambda host, token, resolver=None: old_record.endswith(token))
+    assert ctx.post("/api/installations/7/sso/verify", headers=O, json={"domain": "acme.com"}).status_code == 422
+    ctx.cookies.clear()
+    assert ctx.post("/auth/sso/start", json={"email": "ana@acme.com"}).status_code == 404
+
+
+def test_email_without_verified_claim_is_rejected():
+    assert oidc.allowed_email({"email": "x@acme.com"}, ["acme.com"]) == ""
+    assert oidc.allowed_email({"email": "x@acme.com", "email_verified": "true"}, ["acme.com"]) == ""
+
+
+def test_discovery_requires_https_endpoints():
+    def h(request):
+        return httpx.Response(200, json={"authorization_endpoint": "javascript:alert(1)",
+                                         "token_endpoint": f"{ISSUER}/token", "jwks_uri": f"{ISSUER}/jwks"})
+    with pytest.raises(oidc.OIDCError):
+        oidc.discover(ISSUER, transport=httpx.MockTransport(h))
+
+
+def test_oversized_provider_response_is_rejected():
+    def h(request):
+        return httpx.Response(200, content=b'{"a": "' + b"x" * (oidc.MAX_BYTES + 10) + b'"}')
+    with pytest.raises(oidc.OIDCError):
+        oidc.discover(ISSUER, transport=httpx.MockTransport(h))
+
+
+def test_sso_start_is_rate_limited(ctx):
+    ctx.cookies.clear()
+    codes = [ctx.post("/auth/sso/start", json={"email": "x@nadie.com"}).status_code for _ in range(21)]
+    assert codes[0] == 404 and codes[-1] == 429
