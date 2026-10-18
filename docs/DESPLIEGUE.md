@@ -163,10 +163,11 @@ ejecuciones desde la misma cola que los escaneos. La verificación DNS usa `dnsp
   interrumpe el escaneo. El botón «Enviar prueba» publica un mensaje de comprobación.
 - **Panel de integraciones** (RF-4.8): cada organización conecta sus herramientas desde el panel (pestaña
   *Integraciones*): **Slack** (webhook entrante), **Jira** (URL del sitio, email, token de API y clave del
-  proyecto; API REST v3 con autenticación básica) y **GitLab** (URL base, token de acceso e id o ruta del
-  proyecto; API v4). Desde cualquier hallazgo, los botones «Crear incidencia en Jira/GitLab» abren una
+  proyecto; API REST v3 con autenticación básica), **GitLab** (URL base, token de acceso e id o ruta del
+  proyecto; API v4) y **Bitbucket** (workspace, repositorio, usuario y app password; API 2.0 de Bitbucket
+  Cloud, con las incidencias activadas en el repositorio). Desde cualquier hallazgo, los botones «Crear incidencia en Jira/GitLab/Bitbucket» abren una
   incidencia con la ubicación, la severidad, el escenario de ataque y la corrección. Con el **envío
-  automático** activado en Jira o GitLab, al terminar un escaneo de la rama principal los hallazgos críticos
+  automático** activado en Jira, GitLab o Bitbucket, al terminar un escaneo de la rama principal los hallazgos críticos
   y altos nuevos se crean solos, sin duplicar (tabla `integration_exports`). Toda la configuración es un
   secreto y se guarda cifrada; los tokens nunca se devuelven. Conectar una integración y crear una incidencia
   quedan en el registro de auditoría.

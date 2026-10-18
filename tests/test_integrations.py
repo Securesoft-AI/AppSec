@@ -9,7 +9,7 @@ pytest.importorskip("fastapi")
 from fastapi.testclient import TestClient  # noqa: E402
 
 from appsec_ai.models import Category, Finding, ScanResult, Severity, Triage, Verdict  # noqa: E402
-from appsec_ai.service import gitlab as gl, integrations, jira as jr  # noqa: E402
+from appsec_ai.service import bitbucket as bb, gitlab as gl, integrations, jira as jr  # noqa: E402
 from appsec_ai.service.app import create_app  # noqa: E402
 from appsec_ai.service.auth import SESSION_COOKIE, encode_session  # noqa: E402
 from appsec_ai.service.config import Settings  # noqa: E402
@@ -45,6 +45,18 @@ def gitlab_transport(sent):
     return httpx.MockTransport(h)
 
 
+def bitbucket_transport(sent):
+    def h(request):
+        if request.url.path.endswith("/issues") and request.method == "POST":
+            sent.append(("bitbucket", json.loads(request.content)))
+            n = len(sent)
+            return httpx.Response(201, json={"id": n, "links": {"html": {"href": f"https://bitbucket.org/ws/repo/issues/{n}"}}})
+        if request.method == "GET":  # comprobación del repositorio
+            return httpx.Response(200, json={"slug": "repo"})
+        return httpx.Response(404)
+    return httpx.MockTransport(h)
+
+
 def sample_result():
     def mk(rule, sev):
         return Finding(engine="opengrep", rule_id=rule, category=Category.SAST, severity=sev, title=f"issue {rule}",
@@ -66,6 +78,8 @@ def ctx(tmp_path, monkeypatch):
                             lambda b, e, t: jr.Jira(b, e, t, transport=jira_transport(sent)))
         monkeypatch.setattr(f"{mod.__name__ if hasattr(mod, '__name__') else mod}.Gitlab",
                             lambda b, t: gl.Gitlab(b, t, transport=gitlab_transport(sent)))
+        monkeypatch.setattr(f"{mod.__name__ if hasattr(mod, '__name__') else mod}.Bitbucket",
+                            lambda w, r, u, p: bb.Bitbucket(w, r, u, p, transport=bitbucket_transport(sent)))
     c = TestClient(create_app(settings, db), base_url=PUBLIC)
     result = sample_result()
     with db.session() as s, s.begin():
@@ -81,13 +95,15 @@ def ctx(tmp_path, monkeypatch):
 
 JIRA = {"base_url": JIRA_SITE, "email": "me@acme.com", "token": "t", "project_key": "SEC"}
 GITLAB = {"base_url": GL_SITE, "token": "glpat-x", "project": "acme/app"}
+BITBUCKET = {"workspace": "acme", "repo": "app", "username": "me", "app_password": "atbb-secret"}
 
 
 def test_unified_integrations_endpoint(ctx):
     r = ctx.get("/api/installations/7/integrations").json()
     assert r == {"slack": {"connected": False},
                  "jira": {"configured": False, "base_url": "", "project_key": "", "auto": False},
-                 "gitlab": {"configured": False, "base_url": "", "project": "", "auto": False}}
+                 "gitlab": {"configured": False, "base_url": "", "project": "", "auto": False},
+                 "bitbucket": {"configured": False, "workspace": "", "repo": "", "auto": False}}
 
 
 def test_gitlab_configure_and_create_issue(ctx):
@@ -105,6 +121,18 @@ def test_gitlab_configure_and_create_issue(ctx):
         assert s.query(IntegrationExport).filter_by(provider="gitlab").count() == 1
 
 
+def test_bitbucket_configure_and_create_issue(ctx):
+    assert ctx.patch("/api/installations/7/bitbucket", headers=O, json={"workspace": "acme"}).status_code == 422
+    ok = ctx.patch("/api/installations/7/bitbucket", headers=O, json={**BITBUCKET, "auto": True}).json()
+    assert ok == {"configured": True, "workspace": "acme", "repo": "app", "auto": True}
+    assert ctx.post("/api/installations/7/bitbucket/test", headers=O).json() == {"ok": True}
+    with ctx.db.session() as s:  # app password cifrado
+        assert "atbb-secret" not in json.dumps(s.get(Installation, 7).bitbucket_config)
+    fp = ctx.result.findings[0].fingerprint
+    issue = ctx.post("/api/scans/500/bitbucket", headers=O, json={"fingerprint": fp}).json()
+    assert issue["key"] == "#1" and issue["url"].endswith("/issues/1")
+
+
 def test_manual_create_is_deduplicated(ctx):
     ctx.patch("/api/installations/7/jira", headers=O, json=JIRA)
     fp = ctx.result.findings[0].fingerprint
@@ -119,6 +147,7 @@ def test_auto_export_only_serious_findings_once(ctx):
     # Jira y GitLab con automático activado.
     ctx.patch("/api/installations/7/jira", headers=O, json={**JIRA, "auto": True})
     ctx.patch("/api/installations/7/gitlab", headers=O, json={**GITLAB, "auto": True})
+    ctx.patch("/api/installations/7/bitbucket", headers=O, json={**BITBUCKET, "auto": True})
     worker = Worker(ctx.settings, ctx.db, github=None, scanner=lambda *a, **k: None, triager_factory=lambda n: None)
     findings = [f.model_dump(mode="json") for f in ctx.result.findings]
     worker._auto_export(7, findings, "acme/app", "es")
@@ -126,6 +155,7 @@ def test_auto_export_only_serious_findings_once(ctx):
         # Solo los 2 graves (crítico + alto), no el bajo, por cada destino.
         assert s.query(IntegrationExport).filter_by(provider="jira").count() == 2
         assert s.query(IntegrationExport).filter_by(provider="gitlab").count() == 2
+        assert s.query(IntegrationExport).filter_by(provider="bitbucket").count() == 2
     # Un segundo escaneo con los mismos hallazgos no crea nada nuevo.
     ctx.sent.clear()
     worker._auto_export(7, findings, "acme/app", "es")
