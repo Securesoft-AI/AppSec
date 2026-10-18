@@ -30,9 +30,15 @@ class Principal:
     via_cookie: bool = False
     # Equipo de seguridad: "all" = pentests de todos los clientes; "own" = solo de sus instalaciones (demo).
     staff: str = ""
+    # Instalaciones que administra (admin de la organización en GitHub o dueño de la cuenta): solo ellos cambian
+    # ajustes sensibles como el SSO o las integraciones.
+    managed: frozenset[int] = field(default_factory=frozenset)
 
     def can_see(self, installation_id: int | None) -> bool:
         return self.admin or (installation_id is not None and installation_id in self.installations)
+
+    def can_manage(self, installation_id: int | None) -> bool:
+        return self.admin or (self.can_see(installation_id) and installation_id in self.managed)
 
     def staff_sees(self, installation_id: int) -> bool:
         return self.admin or self.staff == "all" or (self.staff == "own" and installation_id in self.installations)
@@ -42,10 +48,10 @@ def new_state() -> str:
     return secrets.token_urlsafe(24)
 
 
-def encode_session(secret: str, user: dict, installations: list[int], staff: str = "") -> str:
+def encode_session(secret: str, user: dict, installations: list[int], staff: str = "", managed=()) -> str:
     now = int(time.time())
     claims = {"sub": user["login"], "uid": user["id"], "inst": sorted(set(installations)),
-              "iat": now, "exp": now + SESSION_TTL}
+              "mng": sorted(set(managed) & set(installations)), "iat": now, "exp": now + SESSION_TTL}
     if staff:
         claims["staff"] = staff
     return jwt.encode(claims, secret, algorithm="HS256")
@@ -58,7 +64,8 @@ def decode_session(secret: str, token: str) -> Principal | None:
         return None
     staff = data.get("staff", "")
     return Principal(login=data["sub"], installations=frozenset(int(i) for i in data.get("inst", [])),
-                     via_cookie=True, staff=staff if staff in ("all", "own") else "")
+                     via_cookie=True, staff=staff if staff in ("all", "own") else "",
+                     managed=frozenset(int(i) for i in data.get("mng", [])))
 
 
 class Authenticator:

@@ -60,7 +60,7 @@ def client(tmp_path, monkeypatch):
     c = TestClient(app, base_url=PUBLIC)
     with db.session() as s, s.begin():
         s.add(Installation(id=7, account_login="acme", trial_ends_at=utcnow() + dt.timedelta(days=5)))
-    c.cookies.set(SESSION_COOKIE, encode_session(settings.session_secret, {"id": 1, "login": "ana"}, [7]))
+    c.cookies.set(SESSION_COOKIE, encode_session(settings.session_secret, {"id": 1, "login": "ana"}, [7], managed=[7]))
     c.db, c.sent = db, sent
     return c
 

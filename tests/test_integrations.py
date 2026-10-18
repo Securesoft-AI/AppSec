@@ -88,7 +88,7 @@ def ctx(tmp_path, monkeypatch):
         s.add(Repository(id=70, installation_id=7, full_name="acme/app", default_branch="main"))
         s.add(Scan(id=500, repository_id=70, kind="full", head_sha="abc", status=ScanStatus.COMPLETED.value,
                    result=seal(db.cipher, result.model_dump(mode="json"))))
-    c.cookies.set(SESSION_COOKIE, encode_session(settings.session_secret, {"id": 1, "login": "ana"}, [7]))
+    c.cookies.set(SESSION_COOKIE, encode_session(settings.session_secret, {"id": 1, "login": "ana"}, [7], managed=[7]))
     c.db, c.settings, c.sent, c.result = db, settings, sent, result
     return c
 

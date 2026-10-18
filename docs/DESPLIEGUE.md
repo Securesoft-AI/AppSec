@@ -28,6 +28,9 @@ GitHub ──webhook──► API (FastAPI)  ──► Postgres (tabla scans = c
    - **Webhook secret:** una cadena aleatoria larga (`openssl rand -hex 32`). Es el valor de `GITHUB_WEBHOOK_SECRET`.
    - **Permisos del repositorio:** Contents *Read & write*, Metadata *Read*, Pull requests *Read & write*, Checks *Read & write*.
      La escritura en Contents solo se usa para el botón **Abrir PR con fixes**: crea una rama `appsec-ai/fix-…` y abre un PR, nunca escribe en ramas existentes. Si un cliente instala la App solo con lectura, el botón explica en el PR qué permiso falta.
+   - **Permisos de la organización:** Members *Read*. Sirve para saber quién es administrador de la organización:
+     solo ellos (o el dueño, en una cuenta personal) cambian el SSO, las integraciones y las notificaciones. Sin
+     este permiso nadie puede cambiarlos desde el panel.
    - **Eventos:** Pull request, Push, Check run.
 3. Crea la App y apunta el **App ID** (`GITHUB_APP_ID`). Para el login del panel, añade como **Callback URL**
    `https://TU-DOMINIO/auth/callback` y genera un **client secret**: son `GITHUB_CLIENT_ID` y `GITHUB_CLIENT_SECRET`.

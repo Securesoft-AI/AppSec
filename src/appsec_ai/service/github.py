@@ -7,6 +7,7 @@ import os
 import subprocess
 import time
 from pathlib import Path
+from urllib.parse import quote
 
 import httpx
 import jwt
@@ -77,22 +78,42 @@ class GitHubApp:
             raise GitHubError(f"OAuth rechazado: {r.json().get('error', 'sin token')}")
         return token
 
-    def user_with_installations(self, user_token: str) -> tuple[dict, list[int]]:
-        """Usuario autenticado y las instalaciones de esta App a las que tiene acceso."""
+    def user_with_installations(self, user_token: str) -> tuple[dict, list[int], list[int]]:
+        """Usuario autenticado, las instalaciones de esta App a las que tiene acceso y las que administra.
+
+        Administra una instalación si es la de su propia cuenta o si es admin de la organización en GitHub
+        (requiere el permiso de organización "Members: read" en la App; sin él, nadie la administra).
+        """
         headers = {"Authorization": f"Bearer {user_token}"}
         r = self.http.get("/user", headers=headers)
         self._check(r)
         user = r.json()
-        ids, page = [], 1
+        ids, managed, page = [], [], 1
         while True:
             r = self.http.get("/user/installations", headers=headers, params={"per_page": 100, "page": page})
             self._check(r)
             batch = r.json().get("installations", [])
             ids += [i["id"] for i in batch]
+            managed += [i["id"] for i in batch if self._manages(i.get("account") or {}, user["login"], headers)]
             if len(batch) < 100:
                 break
             page += 1
-        return {"id": user["id"], "login": user["login"]}, ids
+        return {"id": user["id"], "login": user["login"]}, ids, managed
+
+    def _manages(self, account: dict, login: str, headers: dict) -> bool:
+        owner = str(account.get("login", ""))
+        if account.get("type") == "User":
+            return owner.lower() == login.lower()
+        if account.get("type") != "Organization" or not owner:
+            return False
+        try:
+            r = self.http.get(f"/user/memberships/orgs/{quote(owner, safe='')}", headers=headers)
+        except httpx.HTTPError:
+            return False
+        if r.status_code != 200:
+            return False
+        m = r.json()
+        return m.get("role") == "admin" and m.get("state") == "active"
 
     def installation(self, installation_id: int) -> "InstallationClient":
         return InstallationClient(self, installation_id)
