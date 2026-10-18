@@ -43,8 +43,10 @@ class Installation(Base):
     modules: Mapped[list] = mapped_column(JSON, default=list)
     # Webhook entrante de Slack para avisos (cifrado si hay clave; vacío = sin avisos).
     slack_webhook: Mapped[dict] = mapped_column(JSON, default=dict)
-    # Jira: {base_url, email, token, project_key} para crear incidencias (cifrado; vacío = sin Jira).
+    # Jira: {base_url, email, token, project_key, auto} para crear incidencias (cifrado; vacío = sin Jira).
     jira_config: Mapped[dict] = mapped_column(JSON, default=dict)
+    # GitLab: {base_url, token, project, auto} para crear incidencias (cifrado; vacío = sin GitLab).
+    gitlab_config: Mapped[dict] = mapped_column(JSON, default=dict)
     subscription_status: Mapped[str] = mapped_column(String(30), default="")
     usage_period: Mapped[str] = mapped_column(String(7), default="")  # AAAA-MM
     ai_requests_used: Mapped[int] = mapped_column(Integer, default=0)
@@ -224,6 +226,21 @@ class RedTeamRun(Base):
     finished_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class IntegrationExport(Base):
+    """Hallazgo ya enviado a una integración (Jira/GitLab): evita crear la incidencia dos veces."""
+
+    __tablename__ = "integration_exports"
+    __table_args__ = (UniqueConstraint("installation_id", "provider", "fingerprint", name="uq_export"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    installation_id: Mapped[int] = mapped_column(ForeignKey("installations.id", ondelete="CASCADE"), index=True)
+    provider: Mapped[str] = mapped_column(String(20))        # "jira" | "gitlab"
+    fingerprint: Mapped[str] = mapped_column(String(64))
+    external_key: Mapped[str] = mapped_column(String(100), default="")
+    url: Mapped[str] = mapped_column(String(500), default="")
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class AuditLog(Base):
     """Registro de auditoría append-only (RF-4.8): acciones sensibles sobre una instalación.
 
@@ -299,6 +316,23 @@ class Database:
 
     def claim_next_redteam(self) -> "RedTeamRun | None":
         return self._claim(RedTeamRun)
+
+    def exported_fingerprints(self, installation_id: int, provider: str) -> set[str]:
+        with self.session() as s:
+            rows = s.scalars(select(IntegrationExport.fingerprint).where(
+                IntegrationExport.installation_id == installation_id, IntegrationExport.provider == provider)).all()
+        return set(rows)
+
+    def record_export(self, installation_id: int, provider: str, fingerprint: str, key: str, url: str) -> bool:
+        """Guarda que un hallazgo ya se exportó. Devuelve False si ya estaba (no se duplica)."""
+        from sqlalchemy.exc import IntegrityError
+        try:
+            with self.session() as s, s.begin():
+                s.add(IntegrationExport(installation_id=installation_id, provider=provider, fingerprint=fingerprint,
+                                        external_key=key, url=url))
+            return True
+        except IntegrityError:
+            return False
 
     def audit(self, installation_id, actor: str, action: str, target: str = "", detail: dict | None = None,
               ip: str = "", session: Session | None = None):

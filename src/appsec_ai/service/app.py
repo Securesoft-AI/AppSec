@@ -29,7 +29,9 @@ from appsec_ai.service.db import (Database, FindingFeedback, FixRequest, Install
                                   AuditLog, RedTeamRun, RedTeamTarget, Repository, Scan, ScanKind, ScanStatus,
                                   WaitlistEntry, utcnow)
 from appsec_ai.service import notify, ownership
-from appsec_ai.service.jira import Jira, JiraError, finding_adf
+from appsec_ai.service import integrations
+from appsec_ai.service.jira import Jira
+from appsec_ai.service.gitlab import Gitlab
 from appsec_ai import redteam
 from appsec_ai.service.github import GitHubApp, GitHubError
 from appsec_ai.service import demo, plans
@@ -132,9 +134,17 @@ class JiraConfigIn(BaseModel):
     email: str = Field(default="", max_length=320)
     token: str = Field(default="", max_length=500)
     project_key: str = Field(default="", max_length=50, pattern=r"^[A-Z0-9_]*$")
+    auto: bool = False
 
 
-class JiraIssueIn(BaseModel):
+class GitlabConfigIn(BaseModel):
+    base_url: str = Field(default="", max_length=300)
+    token: str = Field(default="", max_length=500)
+    project: str = Field(default="", max_length=200)   # id numérico o ruta "grupo/proyecto"
+    auto: bool = False
+
+
+class IssueIn(BaseModel):
     fingerprint: str = Field(min_length=4, max_length=64, pattern=r"^[0-9a-f]+$")
 
 
@@ -841,17 +851,25 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
 
     # -- integración con Jira (RF-4.8) ------------------------------------------------------------
 
-    def _jira_cfg(inst: Installation) -> dict:
-        return unseal(db.cipher, inst.jira_config) or {}
+    # -- integraciones de destino de hallazgos: Jira y GitLab (RF-4.8) ----------------------------
 
-    def _jira_client(cfg: dict) -> Jira:
-        return Jira(cfg["base_url"], cfg["email"], cfg["token"])
+    def _cfg(inst: Installation, provider: str) -> dict:
+        return unseal(db.cipher, getattr(inst, f"{provider}_config")) or {}
 
-    @app.get("/api/installations/{installation_id}/jira")
-    def get_jira(installation_id: int, principal: Principal = Depends(auth)):
+    def _public(provider: str, cfg: dict) -> dict:
+        """Estado de una integración sin el token (nunca se devuelve el secreto)."""
+        out = {"configured": bool(cfg), "base_url": cfg.get("base_url", ""), "auto": bool(cfg.get("auto"))}
+        out["project_key" if provider == "jira" else "project"] = cfg.get(
+            "project_key" if provider == "jira" else "project", "")
+        return out
+
+    @app.get("/api/installations/{installation_id}/integrations")
+    def get_integrations(installation_id: int, principal: Principal = Depends(auth)):
         with db.session() as s:
-            cfg = _jira_cfg(visible_installation(s, principal, installation_id))
-        return {"configured": bool(cfg), "base_url": cfg.get("base_url", ""), "project_key": cfg.get("project_key", "")}
+            inst = visible_installation(s, principal, installation_id)
+            return {"slack": {"connected": bool((unseal(db.cipher, inst.slack_webhook) or {}).get("url"))},
+                    "jira": _public("jira", _cfg(inst, "jira")),
+                    "gitlab": _public("gitlab", _cfg(inst, "gitlab"))}
 
     @app.patch("/api/installations/{installation_id}/jira")
     def set_jira(installation_id: int, data: JiraConfigIn, principal: Principal = Depends(auth)):
@@ -861,51 +879,81 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
             raise HTTPException(status_code=422, detail="faltan datos de Jira (URL, email, token y proyecto)")
         if base and not base.startswith("https://"):
             raise HTTPException(status_code=422, detail="la URL de Jira debe ser https")
+        cfg = {"base_url": base, "email": data.email.strip(), "token": data.token.strip(),
+               "project_key": data.project_key.strip(), "auto": data.auto} if all(filled) else {}
         with db.session() as s, s.begin():
             inst = visible_installation(s, principal, installation_id)
-            cfg = {"base_url": base, "email": data.email.strip(), "token": data.token.strip(),
-                   "project_key": data.project_key.strip()} if all(filled) else {}
             inst.jira_config = seal(db.cipher, cfg) if cfg else {}
             db.audit(installation_id, principal.login, "jira.changed", cfg.get("project_key", ""),
-                     {"configured": bool(cfg)}, session=s)
-            return {"configured": bool(cfg), "base_url": cfg.get("base_url", ""),
-                    "project_key": cfg.get("project_key", "")}
+                     {"configured": bool(cfg), "auto": bool(cfg.get("auto"))}, session=s)
+            return _public("jira", cfg)
 
     @app.post("/api/installations/{installation_id}/jira/test")
     def test_jira(installation_id: int, principal: Principal = Depends(auth)):
         with db.session() as s:
-            cfg = _jira_cfg(visible_installation(s, principal, installation_id))
+            cfg = _cfg(visible_installation(s, principal, installation_id), "jira")
         if not cfg:
             raise HTTPException(status_code=409, detail="Jira no está configurado")
-        if not _jira_client(cfg).check(cfg["project_key"]):
+        if not Jira(cfg["base_url"], cfg["email"], cfg["token"]).check(cfg["project_key"]):
             raise HTTPException(status_code=502, detail="Jira no aceptó las credenciales o el proyecto")
         return {"ok": True}
 
-    @app.post("/api/scans/{scan_id}/jira")
-    def create_jira_issue(scan_id: int, data: JiraIssueIn, principal: Principal = Depends(auth)):
+    @app.patch("/api/installations/{installation_id}/gitlab")
+    def set_gitlab(installation_id: int, data: GitlabConfigIn, principal: Principal = Depends(auth)):
+        base = (data.base_url.strip().rstrip("/") or "https://gitlab.com")
+        filled = [bool(data.token.strip()), bool(data.project.strip())]
+        if any(filled) and not all(filled):
+            raise HTTPException(status_code=422, detail="faltan datos de GitLab (token y proyecto)")
+        if not base.startswith("https://"):
+            raise HTTPException(status_code=422, detail="la URL de GitLab debe ser https")
+        cfg = {"base_url": base, "token": data.token.strip(), "project": data.project.strip(),
+               "auto": data.auto} if all(filled) else {}
+        with db.session() as s, s.begin():
+            inst = visible_installation(s, principal, installation_id)
+            inst.gitlab_config = seal(db.cipher, cfg) if cfg else {}
+            db.audit(installation_id, principal.login, "gitlab.changed", cfg.get("project", ""),
+                     {"configured": bool(cfg), "auto": bool(cfg.get("auto"))}, session=s)
+            return _public("gitlab", cfg)
+
+    @app.post("/api/installations/{installation_id}/gitlab/test")
+    def test_gitlab(installation_id: int, principal: Principal = Depends(auth)):
+        with db.session() as s:
+            cfg = _cfg(visible_installation(s, principal, installation_id), "gitlab")
+        if not cfg:
+            raise HTTPException(status_code=409, detail="GitLab no está configurado")
+        if not Gitlab(cfg["base_url"], cfg["token"]).check(cfg["project"]):
+            raise HTTPException(status_code=502, detail="GitLab no aceptó el token o el proyecto")
+        return {"ok": True}
+
+    def _create_issue(provider: str, scan_id: int, fingerprint: str, principal: Principal) -> dict:
         with db.session() as s:
             scan = visible_scan(s, principal, scan_id)
             repo = s.get(Repository, scan.repository_id)
             inst = s.get(Installation, repo.installation_id)
-            cfg, lang, repo_name = _jira_cfg(inst), principal_lang(inst), repo.full_name
+            cfg, lang, repo_name, inst_id = _cfg(inst, provider), principal_lang(inst), repo.full_name, inst.id
             result = unseal(db.cipher, scan.result) if scan.result else None
         if not cfg:
-            raise HTTPException(status_code=409, detail="Jira no está configurado")
-        finding = next((f for f in (result or {}).get("findings", []) if f.get("fingerprint") == data.fingerprint), None)
+            raise HTTPException(status_code=409, detail=f"{provider} no está configurado")
+        finding = next((f for f in (result or {}).get("findings", []) if f.get("fingerprint") == fingerprint), None)
         if finding is None:
             raise HTTPException(status_code=404, detail="hallazgo no encontrado en este escaneo")
-        summary = f"[{finding.get('severity', '')}] {finding.get('title', '')} — {repo_name}"
-        labels = ["appsec-ai", str(finding.get("severity", "")), str(finding.get("category", ""))]
         try:
-            issue = _jira_client(cfg).create_issue(cfg["project_key"], summary,
-                                                   finding_adf(finding, repo_name, lang),
-                                                   [l for l in labels if l])
-        except JiraError as e:
-            log.warning("no se pudo crear la incidencia en Jira: %s", e)
-            raise HTTPException(status_code=502, detail="Jira no pudo crear la incidencia") from None
-        db.audit(repo.installation_id, principal.login, "jira.issue_created", issue["key"],
-                 {"scan": scan_id, "fingerprint": data.fingerprint})
+            issue = integrations.create_issue(provider, cfg, finding, repo_name, lang)
+        except integrations.IntegrationError as e:
+            log.warning("no se pudo crear la incidencia en %s: %s", provider, e)
+            raise HTTPException(status_code=502, detail=f"{provider} no pudo crear la incidencia") from None
+        if db.record_export(inst_id, provider, fingerprint, issue["key"], issue["url"]):
+            db.audit(inst_id, principal.login, f"{provider}.issue_created", issue["key"],
+                     {"scan": scan_id, "fingerprint": fingerprint})
         return issue
+
+    @app.post("/api/scans/{scan_id}/jira")
+    def create_jira_issue(scan_id: int, data: IssueIn, principal: Principal = Depends(auth)):
+        return _create_issue("jira", scan_id, data.fingerprint, principal)
+
+    @app.post("/api/scans/{scan_id}/gitlab")
+    def create_gitlab_issue(scan_id: int, data: IssueIn, principal: Principal = Depends(auth)):
+        return _create_issue("gitlab", scan_id, data.fingerprint, principal)
 
     # -- planes y facturación (RF-4.5) ------------------------------------------------------------
 

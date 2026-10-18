@@ -161,12 +161,15 @@ ejecuciones desde la misma cola que los escaneos. La verificación DNS usa `dnsp
   con hallazgos críticos o altos, cuando un pentest pasa a «programado» o «informe entregado» y cuando un
   red team encuentra algo. El webhook es un secreto y se guarda cifrado; un fallo al avisar se registra y no
   interrumpe el escaneo. El botón «Enviar prueba» publica un mensaje de comprobación.
-- **Incidencias en Jira** (RF-4.8): cada organización conecta su Jira Cloud desde el panel (*Servicios y
-  plan → Jira*): URL del sitio, email, token de API y clave del proyecto. Desde cualquier hallazgo, el botón
-  «Crear incidencia en Jira» abre una incidencia (tipo Bug) con la ubicación, la severidad, el escenario de
-  ataque y la corrección. La configuración es un secreto y se guarda cifrada; el token nunca se devuelve. Se
-  usa la API REST v3 de Jira con autenticación básica (email + token). Crear una incidencia queda en el
-  registro de auditoría.
+- **Panel de integraciones** (RF-4.8): cada organización conecta sus herramientas desde el panel (pestaña
+  *Integraciones*): **Slack** (webhook entrante), **Jira** (URL del sitio, email, token de API y clave del
+  proyecto; API REST v3 con autenticación básica) y **GitLab** (URL base, token de acceso e id o ruta del
+  proyecto; API v4). Desde cualquier hallazgo, los botones «Crear incidencia en Jira/GitLab» abren una
+  incidencia con la ubicación, la severidad, el escenario de ataque y la corrección. Con el **envío
+  automático** activado en Jira o GitLab, al terminar un escaneo de la rama principal los hallazgos críticos
+  y altos nuevos se crean solos, sin duplicar (tabla `integration_exports`). Toda la configuración es un
+  secreto y se guarda cifrada; los tokens nunca se devuelven. Conectar una integración y crear una incidencia
+  quedan en el registro de auditoría.
 - **Cifrado en reposo** con `DATA_ENCRYPTION_KEY` (Fernet): resultados de escaneos y detalle de las correcciones
   en la base de datos, y la caché del triage en disco. Para rotar la clave: `DATA_ENCRYPTION_KEY=nueva,antigua`
   (cifra con la primera y descifra con todas). Las filas anteriores sin cifrar se siguen leyendo. Sin clave, el
