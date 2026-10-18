@@ -28,7 +28,7 @@ from appsec_ai.service.crypto import seal
 from appsec_ai.service.db import (Database, FindingFeedback, FixRequest, Installation, PentestRequest, PentestStatus,
                                   AuditLog, RedTeamRun, RedTeamTarget, Repository, Scan, ScanKind, ScanStatus,
                                   WaitlistEntry, utcnow)
-from appsec_ai.service import ownership
+from appsec_ai.service import notify, ownership
 from appsec_ai import redteam
 from appsec_ai.service.github import GitHubApp, GitHubError
 from appsec_ai.service import demo, plans
@@ -122,6 +122,10 @@ class RedTeamTargetIn(BaseModel):
     headers: dict[str, str] = Field(default_factory=dict)
 
 
+class NotificationsIn(BaseModel):
+    slack_webhook: str = Field(default="", max_length=500)
+
+
 class CheckoutIn(BaseModel):
     items: list[str] = Field(min_length=1, max_length=10)  # servicios y/o paquetes
 
@@ -185,6 +189,10 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
     if stripe is None and settings.stripe_secret_key:
         stripe = Stripe(settings.stripe_secret_key)
     price_to_item = {price: item for item, price in settings.stripe_prices.items() if price}
+    slack = notify.Slack()
+
+    def principal_lang(inst: Installation | None) -> str:
+        return "en" if ((inst.language if inst else "") or settings.language) == "en" else "es"
     login_limiter = RateLimiter(limit=10, window_seconds=300)
     if settings.demo_login:
         log.warning("MODO DEMO ACTIVO: login %s/**** con una organización de ejemplo. No usar con datos reales.",
@@ -652,7 +660,16 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
             log.info("pentest %s actualizado por %s: %s", row.id, principal.login, row.status)
             db.audit(row.installation_id, principal.login, "pentest.updated", str(row.id),
                      {"status": row.status, "quote_eur": row.quote_eur}, session=s)
-            return {**_pentest_summary(row, db.cipher), "installation_id": row.installation_id}
+            notify_status = row.status if data.status is not None else ""
+            inst = s.get(Installation, row.installation_id)
+            webhook, plang, target = _slack_url(inst), principal_lang(inst), row.target
+            out = {**_pentest_summary(row, db.cipher), "installation_id": row.installation_id}
+        if notify_status in (PentestStatus.SCHEDULED.value, PentestStatus.REPORTED.value) and webhook:
+            from appsec_ai.i18n import ui as _ui  # etiqueta del estado, ya traducida
+            label = {"scheduled": {"es": "programado", "en": "scheduled"},
+                     "reported": {"es": "informe entregado", "en": "report delivered"}}[notify_status][plang]
+            slack.post(webhook, *notify.pentest_message(target, label, plang, f"{settings.public_url}/app"))
+        return out
 
     # -- red teaming dinámico de endpoints con LLM (RF-2.7) ---------------------------------------
 
@@ -773,6 +790,42 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
             if run is None or run.installation_id != installation_id:
                 raise HTTPException(status_code=404, detail="ejecución no encontrada")
             return _run_out(run, db.cipher)
+
+    # -- avisos a Slack (RF-4.8) ------------------------------------------------------------------
+
+    def _slack_url(inst: Installation) -> str:
+        return (unseal(db.cipher, inst.slack_webhook) or {}).get("url", "")
+
+    @app.get("/api/installations/{installation_id}/notifications")
+    def get_notifications(installation_id: int, principal: Principal = Depends(auth)):
+        with db.session() as s:
+            inst = visible_installation(s, principal, installation_id)
+            return {"slack_connected": bool(_slack_url(inst))}
+
+    @app.patch("/api/installations/{installation_id}/notifications")
+    def set_notifications(installation_id: int, data: NotificationsIn, principal: Principal = Depends(auth)):
+        url = data.slack_webhook.strip()
+        if url and not url.startswith("https://hooks.slack.com/"):
+            raise HTTPException(status_code=422, detail="el webhook debe empezar por https://hooks.slack.com/")
+        with db.session() as s, s.begin():
+            inst = visible_installation(s, principal, installation_id)
+            inst.slack_webhook = seal(db.cipher, {"url": url}) if url else {}
+            db.audit(installation_id, principal.login, "notifications.changed", "slack",
+                     {"connected": bool(url)}, session=s)
+            return {"slack_connected": bool(url)}
+
+    @app.post("/api/installations/{installation_id}/notifications/test")
+    def test_notifications(installation_id: int, principal: Principal = Depends(auth)):
+        with db.session() as s:
+            inst = visible_installation(s, principal, installation_id)
+            url = _slack_url(inst)
+            lang = principal_lang(inst)
+        if not url:
+            raise HTTPException(status_code=409, detail="no hay ningún webhook de Slack configurado")
+        ok = slack.post(url, *notify.test_message(lang))
+        if not ok:
+            raise HTTPException(status_code=502, detail="Slack no aceptó el mensaje de prueba")
+        return {"ok": True}
 
     # -- planes y facturación (RF-4.5) ------------------------------------------------------------
 

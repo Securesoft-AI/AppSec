@@ -217,7 +217,10 @@ const I18N = {
     "a.pentest.updated": "Pentest actualizado", "a.redteam.target_created": "Objetivo de red team creado", "a.redteam.verified": "Dominio verificado",
     "a.redteam.target_deleted": "Objetivo de red team eliminado", "a.redteam.run_started": "Red team lanzado",
     "a.settings.changed": "Ajustes cambiados", "a.billing.checkout": "Pago iniciado", "a.billing.portal": "Facturación abierta",
-    "a.billing.subscription": "Suscripción actualizada",
+    "a.billing.subscription": "Suscripción actualizada", "a.notifications.changed": "Notificaciones cambiadas",
+    notif_title: "Avisos en Slack", notif_hint: "Pega un webhook entrante de Slack (https://hooks.slack.com/…). Te avisamos de escaneos con hallazgos graves, pentests y red team.",
+    notif_connected: "Slack conectado.", notif_none: "Slack no está conectado.", notif_save: "Guardar", notif_test: "Enviar prueba",
+    notif_saved: "Guardado.", notif_tested: "Mensaje de prueba enviado a Slack.", notif_clear: "Quitar",
   },
   en: {
     logout: "Sign out", gh_lang: "GitHub language",
@@ -280,7 +283,10 @@ const I18N = {
     "a.pentest.updated": "Pentest updated", "a.redteam.target_created": "Red team target created", "a.redteam.verified": "Domain verified",
     "a.redteam.target_deleted": "Red team target deleted", "a.redteam.run_started": "Red team launched",
     "a.settings.changed": "Settings changed", "a.billing.checkout": "Checkout started", "a.billing.portal": "Billing opened",
-    "a.billing.subscription": "Subscription updated",
+    "a.billing.subscription": "Subscription updated", "a.notifications.changed": "Notifications changed",
+    notif_title: "Slack alerts", notif_hint: "Paste a Slack incoming webhook (https://hooks.slack.com/…). We ping you on scans with serious findings, pentests and red team.",
+    notif_connected: "Slack connected.", notif_none: "Slack not connected.", notif_save: "Save", notif_test: "Send test",
+    notif_saved: "Saved.", notif_tested: "Test message sent to Slack.", notif_clear: "Remove",
   },
 };
 let lang = (() => { try { return localStorage.getItem("lang") || (navigator.language || "es").slice(0, 2); } catch { return "es"; } })();
@@ -827,7 +833,39 @@ function viewPlan() {
         } }, t("manage")) : "")),
     el("section", {}, el("h2", {}, t("bundles")), bundles),
     el("section", {}, el("h2", {}, t("choose")), services),
+    notificationsCard(),
     auditCard());
+}
+
+function notificationsCard() {
+  const msg = el("p", { class: "notice ok", hidden: true });
+  const input = el("input", { type: "url", maxlength: 500, placeholder: "https://hooks.slack.com/services/…", class: "full" });
+  const state = el("span", { class: "pill off" }, t("notif_none"));
+  const base = () => `/api/installations/${encodeURIComponent(instId())}/notifications`;
+  const setState = (connected) => {
+    state.className = "pill " + (connected ? "on" : "off");
+    state.textContent = connected ? t("notif_connected") : t("notif_none");
+    if (connected) input.value = "";
+    input.placeholder = connected ? "•••••••• (" + t("notif_connected") + ")" : "https://hooks.slack.com/services/…";
+  };
+  const show = (text, ok = true) => { msg.textContent = text; msg.className = "notice" + (ok ? " ok" : ""); msg.hidden = false; };
+  api(base()).then((r) => setState(r.slack_connected)).catch(() => {});
+  const save = async (clear) => {
+    try {
+      const r = await api(base(), { method: "PATCH", body: JSON.stringify({ slack_webhook: clear ? "" : input.value }) });
+      setState(r.slack_connected); show(t("notif_saved"));
+    } catch (e) { show(t("error") + e.message, false); }
+  };
+  return el("section", { class: "card" }, el("div", { class: "toolbar" }, el("h2", {}, t("notif_title")), state),
+    el("p", { class: "muted" }, t("notif_hint")), msg,
+    el("div", { class: "form" }, el("label", { class: "full" }, "Webhook", input)),
+    el("div", { class: "toolbar" },
+      el("button", { class: "btn primary", type: "button", onclick: () => save(false) }, t("notif_save")),
+      el("button", { class: "btn", type: "button", onclick: async () => {
+        try { await api(base() + "/test", { method: "POST" }); show(t("notif_tested")); }
+        catch (e) { show(t("error") + e.message, false); }
+      } }, t("notif_test")),
+      el("button", { class: "btn", type: "button", onclick: () => save(true) }, t("notif_clear"))));
 }
 
 function auditCard() {

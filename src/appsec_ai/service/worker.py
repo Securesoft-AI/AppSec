@@ -22,6 +22,7 @@ from appsec_ai.i18n import norm, ui
 from appsec_ai.service.db import Database, FixRequest, Installation, Repository, Scan, ScanKind, ScanStatus, utcnow
 from appsec_ai.service.github import GitHubApp, GitHubError
 from appsec_ai.service.sandbox import runner_scan, sandboxed_scan
+from appsec_ai.service import notify
 
 log = logging.getLogger("appsec_ai.worker")
 MAX_ATTEMPTS = 3
@@ -46,12 +47,14 @@ def filter_to_files(result: ScanResult, files: set[str]) -> ScanResult:
 
 
 class Worker:
-    def __init__(self, settings: Settings, db: Database, github: GitHubApp, scanner=None, triager_factory=None):
+    def __init__(self, settings: Settings, db: Database, github: GitHubApp, scanner=None, triager_factory=None,
+                 notifier=None):
         self.settings = settings
         self.db = db
         self.github = github
         self.scanner = scanner or self._default_scanner
         self.triager_factory = triager_factory or self._default_triager
+        self.notifier = notifier if notifier is not None else notify.Slack()
 
     def _default_scanner(self, src: Path, only_files: set[str] | None = None,
                          engines: list[str] | None = None) -> ScanResult:
@@ -175,12 +178,28 @@ class Worker:
         if pr_number:
             gh.upsert_comment(repo_name, pr_number, render.pr_comment(result, lang=lang), render.COMMENT_MARKER)
 
+        counts = render.counts(findings)
         self._update(
             scan_id, status=ScanStatus.COMPLETED.value, finished_at=utcnow(), error="",
             result=seal(self.db.cipher, result.model_dump(mode="json")),
-            summary={"counts": render.counts(findings), "total": len(findings), "conclusion": conclusion,
+            summary={"counts": counts, "total": len(findings), "conclusion": conclusion,
                      "llm_usage": result.llm_usage, "files_in_scope": len(changed) if changed is not None else None},
         )
+        # Aviso a Slack solo en la rama principal y solo si hay algo grave que mirar (no en cada PR).
+        if kind in (ScanKind.FULL.value, ScanKind.MANUAL.value) and (counts.get("critical") or counts.get("high")):
+            self._notify_slack(installation_id, lang, *notify.scan_message(
+                repo_name, kind, counts, len(findings), lang, self._panel_url(installation_id)))
+
+    def _panel_url(self, installation_id: int) -> str:
+        base = (self.settings.public_url or "").rstrip("/")
+        return f"{base}/app" if base else ""
+
+    def _notify_slack(self, installation_id: int, lang: str, text: str, blocks: list):
+        with self.db.session() as s:
+            inst = s.get(Installation, installation_id)
+            webhook = (unseal(self.db.cipher, inst.slack_webhook) or {}).get("url", "") if inst else ""
+        if webhook:
+            self.notifier.post(webhook, text, blocks)
 
     # -- correcciones ("Abrir PR con fixes") ----------------------------------------------------
 
@@ -270,6 +289,7 @@ class Worker:
 
         with self.db.session() as s:
             run = s.get(RedTeamRun, run_id)
+            installation_id = run.installation_id
             tgt = s.get(RedTeamTarget, run.target_id)
             if tgt is None:
                 return self._finish_redteam(run_id, summary={}, result=None, error="el objetivo ya no existe")
@@ -280,8 +300,13 @@ class Worker:
                                     body_template=tgt.body_template, response_path=tgt.response_path,
                                     timeout=self.settings.redteam_timeout)
         results = redteam.run_redteam(target)
+        summary = redteam.summarize(results)
         payload = {"probes": [vars(r) for r in results], "target": {"url": tgt.url, "host": tgt.host}}
-        self._finish_redteam(run_id, summary=redteam.summarize(results), result=payload)
+        self._finish_redteam(run_id, summary=summary, result=payload)
+        if summary.get("vulnerable"):
+            lang = norm(self.settings.language)
+            self._notify_slack(installation_id, lang, *notify.redteam_message(
+                tgt.host, summary["vulnerable"], summary["probes"], lang, self._panel_url(installation_id)))
 
     def _finish_redteam(self, run_id: int, summary: dict, result, error: str = ""):
         from appsec_ai.service.db import RedTeamRun
