@@ -22,7 +22,7 @@ from appsec_ai.i18n import norm, ui
 from appsec_ai.service.db import Database, FixRequest, Installation, Repository, Scan, ScanKind, ScanStatus, utcnow
 from appsec_ai.service.github import GitHubApp, GitHubError
 from appsec_ai.service.sandbox import runner_scan, sandboxed_scan
-from appsec_ai.service import notify
+from appsec_ai.service import integrations, notify
 
 log = logging.getLogger("appsec_ai.worker")
 MAX_ATTEMPTS = 3
@@ -185,10 +185,19 @@ class Worker:
             summary={"counts": counts, "total": len(findings), "conclusion": conclusion,
                      "llm_usage": result.llm_usage, "files_in_scope": len(changed) if changed is not None else None},
         )
-        # Aviso a Slack solo en la rama principal y solo si hay algo grave que mirar (no en cada PR).
+        # Solo la rama principal y solo si hay algo grave: aviso a Slack y envío automático a Jira/GitLab.
         if kind in (ScanKind.FULL.value, ScanKind.MANUAL.value) and (counts.get("critical") or counts.get("high")):
             self._notify_slack(installation_id, lang, *notify.scan_message(
                 repo_name, kind, counts, len(findings), lang, self._panel_url(installation_id)))
+            self._auto_export(installation_id, [f.model_dump(mode="json") for f in findings], repo_name, lang)
+
+    def _auto_export(self, installation_id: int, findings: list[dict], repo_name: str, lang: str):
+        with self.db.session() as s:
+            inst = s.get(Installation, installation_id)
+            configs = {p: (unseal(self.db.cipher, getattr(inst, f"{p}_config")) or {}) for p in integrations.PROVIDERS}
+        created = integrations.auto_export(self.db, self.db.cipher, installation_id, configs, findings, repo_name, lang)
+        for provider, n in created.items():
+            self.db.audit(installation_id, "system", f"{provider}.issue_created", "auto", {"count": n})
 
     def _panel_url(self, installation_id: int) -> str:
         base = (self.settings.public_url or "").rstrip("/")
