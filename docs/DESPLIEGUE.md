@@ -161,6 +161,12 @@ ejecuciones desde la misma cola que los escaneos. La verificación DNS usa `dnsp
   con hallazgos críticos o altos, cuando un pentest pasa a «programado» o «informe entregado» y cuando un
   red team encuentra algo. El webhook es un secreto y se guarda cifrado; un fallo al avisar se registra y no
   interrumpe el escaneo. El botón «Enviar prueba» publica un mensaje de comprobación.
+- **Incidencias en Jira** (RF-4.8): cada organización conecta su Jira Cloud desde el panel (*Servicios y
+  plan → Jira*): URL del sitio, email, token de API y clave del proyecto. Desde cualquier hallazgo, el botón
+  «Crear incidencia en Jira» abre una incidencia (tipo Bug) con la ubicación, la severidad, el escenario de
+  ataque y la corrección. La configuración es un secreto y se guarda cifrada; el token nunca se devuelve. Se
+  usa la API REST v3 de Jira con autenticación básica (email + token). Crear una incidencia queda en el
+  registro de auditoría.
 - **Cifrado en reposo** con `DATA_ENCRYPTION_KEY` (Fernet): resultados de escaneos y detalle de las correcciones
   en la base de datos, y la caché del triage en disco. Para rotar la clave: `DATA_ENCRYPTION_KEY=nueva,antigua`
   (cifra con la primera y descifra con todas). Las filas anteriores sin cifrar se siguen leyendo. Sin clave, el

@@ -43,6 +43,8 @@ class Installation(Base):
     modules: Mapped[list] = mapped_column(JSON, default=list)
     # Webhook entrante de Slack para avisos (cifrado si hay clave; vacío = sin avisos).
     slack_webhook: Mapped[dict] = mapped_column(JSON, default=dict)
+    # Jira: {base_url, email, token, project_key} para crear incidencias (cifrado; vacío = sin Jira).
+    jira_config: Mapped[dict] = mapped_column(JSON, default=dict)
     subscription_status: Mapped[str] = mapped_column(String(30), default="")
     usage_period: Mapped[str] = mapped_column(String(7), default="")  # AAAA-MM
     ai_requests_used: Mapped[int] = mapped_column(Integer, default=0)
