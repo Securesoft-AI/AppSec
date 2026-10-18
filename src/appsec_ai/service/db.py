@@ -49,6 +49,8 @@ class Installation(Base):
     gitlab_config: Mapped[dict] = mapped_column(JSON, default=dict)
     # Bitbucket: {workspace, repo, username, app_password, auto} (cifrado; vacío = sin Bitbucket).
     bitbucket_config: Mapped[dict] = mapped_column(JSON, default=dict)
+    # SSO OIDC: {issuer, client_id, client_secret, domains} (cifrado; vacío = sin SSO).
+    oidc_config: Mapped[dict] = mapped_column(JSON, default=dict)
     subscription_status: Mapped[str] = mapped_column(String(30), default="")
     usage_period: Mapped[str] = mapped_column(String(7), default="")  # AAAA-MM
     ai_requests_used: Mapped[int] = mapped_column(Integer, default=0)
