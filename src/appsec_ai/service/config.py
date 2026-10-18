@@ -58,6 +58,9 @@ class Settings:
     scan_sandbox: str = field(default_factory=lambda: _env("SCAN_SANDBOX", "subprocess"))
     # Envoltorio opcional del subproceso, p. ej. "bwrap --unshare-all --share-net ... --bind {src} {src}".
     scan_sandbox_cmd: str = field(default_factory=lambda: _env("SCAN_SANDBOX_CMD"))
+    # Contenedor efímero por escaneo (RF-4.4): plantilla con {src} {out} {files_from} {engines}. Tiene
+    # prioridad sobre SCAN_SANDBOX: cada escaneo corre en su propio contenedor (gVisor/Firecracker/K8s Job).
+    scan_runner: str = field(default_factory=lambda: _env("SCAN_RUNNER"))
     scan_timeout: int = field(default_factory=lambda: int(_env("SCAN_TIMEOUT", "900")))
     # Cifrado en reposo de resultados y caché (claves Fernet separadas por comas; la primera cifra).
     data_encryption_key: str = field(default_factory=lambda: _env("DATA_ENCRYPTION_KEY"))

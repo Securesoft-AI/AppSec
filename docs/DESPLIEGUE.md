@@ -160,10 +160,24 @@ ejecuciones desde la misma cola que los escaneos. La verificación DNS usa `dnsp
   en la base de datos, y la caché del triage en disco. Para rotar la clave: `DATA_ENCRYPTION_KEY=nueva,antigua`
   (cifra con la primera y descifra con todas). Las filas anteriores sin cifrar se siguen leyendo. Sin clave, el
   servicio arranca pero lo avisa en el log.
-- **Pendiente antes de abrir al público:**
-  - un contenedor efímero por escaneo (gVisor/Firecracker, p. ej. un Job de Kubernetes o de Cloud Run con
-    `runtimeClassName: gvisor`). El subproceso ya no tiene secretos, pero comparte red y sistema de ficheros
-    con el worker. Como paso intermedio, ejecuta el worker con el runtime `runsc` de gVisor;
+- **Contenedor efímero por escaneo** (`SCAN_RUNNER`, RF-4.4): cuando se define, cada escaneo corre en su
+  propio contenedor en lugar de en un subproceso del worker, así que no comparte red ni sistema de ficheros
+  con él. Es una plantilla de orden con cuatro marcadores que el worker sustituye: `{src}` (directorio a
+  montar de solo lectura), `{out}` (fichero donde el contenedor deja el JSON del resultado), `{files_from}`
+  (lista de ficheros en los escaneos incrementales; vacío si es completo) y `{engines}` (motores separados
+  por comas). El contenedor monta `{src}` de solo lectura, sin red y sin secretos, corre `appsec-ai scan`
+  dentro (la propia imagen del servicio ya lo trae) y escribe el resultado en `{out}`. Ejemplo con gVisor,
+  reutilizando la imagen del servicio:
+
+  ```
+  SCAN_RUNNER=docker run --rm --runtime=runsc --network=none --read-only \
+    -v {src}:/src:ro -v {out}:/out.json:rw --tmpfs /tmp \
+    --memory=4g --cpus=2 --pids-limit=512 \
+    appsec-ai:latest sh -c 'appsec-ai scan /src --format json --engines "{engines}" > /out.json'
+  ```
+
+  En Kubernetes, el mismo patrón es un Job efímero con `runtimeClassName: gvisor` por escaneo. Sin
+  `SCAN_RUNNER`, sigue valiendo el subproceso aislado (`SCAN_SANDBOX`/`SCAN_SANDBOX_CMD`).
 
 ## 5. Variables de entorno
 
@@ -173,6 +187,7 @@ ejecuciones desde la misma cola que los escaneos. La verificación DNS usa `dnsp
 | `STAFF_LOGINS` | No | Logins de GitHub del equipo de seguridad (vista Equipo de pentests) |
 | `REDTEAM_ENABLED` | No | Red teaming dinámico activado (por defecto sí; `0` para desactivarlo) |
 | `REDTEAM_TIMEOUT` | No | Timeout por petición de red teaming, en segundos (por defecto 30) |
+| `SCAN_RUNNER` | No | Contenedor efímero por escaneo: plantilla con `{src}` `{out}` `{files_from}` `{engines}` (RF-4.4) |
 | `GITHUB_APP_ID` | Sí (worker) | ID de la GitHub App |
 | `GITHUB_APP_PRIVATE_KEY` | Sí (worker) | Clave privada PEM |
 | `GITHUB_WEBHOOK_SECRET` | Sí (API) | Secreto de los webhooks |

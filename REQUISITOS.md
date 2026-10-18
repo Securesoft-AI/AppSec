@@ -97,7 +97,7 @@ Leyenda: ✅ hecho · 🔜 MVP · ⏭ posterior
 - ✅ RF‑4.2b Cola de escaneos en Postgres con varios workers, idempotente frente a reenvíos de webhooks.
 - ✅ RF‑4.2c API REST de instalaciones, repositorios y escaneos (acceso provisional con token de administrador).
 - ✅ RF‑4.3 Panel por organización (`/app`): hallazgos por severidad, repositorio, área y tendencia de 30 días; inventario de IA; detalle por repositorio con botón de fixes.
-- 🟡 RF‑4.4 Multi‑tenant: datos separados por instalación; clonado seguro (sin hooks, LFS ni enlaces simbólicos, token fuera de los argumentos), workdir temporal que siempre se borra, worker sin privilegios. Falta aislar cada escaneo en su propio contenedor efímero (gVisor/Firecracker).
+- ✅ RF‑4.4 Multi‑tenant: datos separados por instalación; clonado seguro (sin hooks, LFS ni enlaces simbólicos, token fuera de los argumentos), workdir temporal que siempre se borra, worker sin privilegios. Cada escaneo puede correr en su propio contenedor efímero con `SCAN_RUNNER` (gVisor/Firecracker o un Job de Kubernetes): sin red, sistema de ficheros de solo lectura y sin secretos; ver `docs/DESPLIEGUE.md`.
 - ✅ RF‑4.5 Facturación con Stripe (Checkout, Portal de cliente y webhooks firmados) y planes Free/Starter/Team/Business aplicados en el servidor: repositorios, escaneo en PR, escaneo semanal en Free, triage con IA con presupuesto mensual, botón de fixes, PDF y mapeo de cumplimiento. Prueba de Team de 14 días al instalar la App.
 - ✅ RF‑4.6 Inglés y español en panel, landing, informes (Markdown y PDF), checks, comentarios y PR de correcciones de GitHub, y en el triage. Cada organización elige el idioma de GitHub; cada usuario, el del panel. Los correos se traducirán cuando existan (hoy el servicio no envía ninguno).
 - ✅ RF‑4.7 Informe PDF descargable en español o inglés (panel, `GET /api/scans/{id}/report.pdf` y `appsec-ai scan --format pdf`), con metodología, mapeo a marcos de IA, inventario y detalle de hallazgos.
@@ -166,7 +166,7 @@ Precios iguales en € y $ para simplificar. Hay que validarlos con los design p
 | ✅ 1 | 41 reglas SAST propias; motor de IA con tree-sitter y 15 reglas; validación con código real |
 | ✅ 2 | Backend del SaaS: GitHub App, webhooks, cola, worker, checks y comentarios en PR, Docker |
 | ✅ 3 | Servicios por separado (SAST, SCA, Secretos, IaC, IA, Pentest) con paquetes; panel unificado con vista por servicio, escaneo bajo demanda y solicitud de pentests; login de demo user/pass |
-| ✅ 4 | Migraciones de base de datos (Alembic); vista Equipo para gestionar pentests (presupuesto, aceptación, estado, informe) e informe de pentest en PDF; red teaming dinámico de endpoints con IA (RF‑2.7); registros de auditoría |
+| ✅ 4 | Migraciones de base de datos (Alembic); vista Equipo para gestionar pentests (presupuesto, aceptación, estado, informe) e informe de pentest en PDF; red teaming dinámico de endpoints con IA (RF‑2.7); registros de auditoría; contenedor efímero por escaneo (RF‑4.4, `SCAN_RUNNER`) |
 | ✅ 2 | Landing bilingüe (nombre provisional "Atalaya") con lista de espera guardada en el backend y cabeceras de seguridad |
 | 2 | Probar el triage con la API real; conjunto de evaluación; crear la GitHub App y desplegar |
 | 1–2 | Landing bilingüe con lista de espera y precios; reclutar 5–10 design partners entre tus contactos |
