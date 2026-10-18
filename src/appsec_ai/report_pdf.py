@@ -133,6 +133,8 @@ def to_pdf(result: ScanResult, lang: str = "es", target: str = "", commit: str =
                   Paragraph(f'<font face="Courier" size="7">{_e(c.file)}:{c.line}</font>', st["cell"])] for c in inventory[:100]]
         story.append(_table(rows, [30 * mm, 55 * mm, 81 * mm]))
 
+    story += _threat_model(result, lang, st)
+
     story.append(Paragraph(T["detail"], st["h2"]))
     if not findings:
         story.append(Paragraph(T["none"], st["body"]))
@@ -255,3 +257,34 @@ def _table(rows: list[list], widths: list[float], align_right: list[int] | None 
         style.append(("ALIGN", (col, 0), (col, -1), "RIGHT"))
     table.setStyle(TableStyle(style))
     return table
+
+
+def _threat_model(result: ScanResult, lang: str, st: dict) -> list:
+    """RF-2.6: flujos de datos, tabla de amenazas y, por amenaza, camino de ataque y mitigaciones."""
+    from appsec_ai.i18n import ui
+
+    tm = result.threat_model
+    if tm is None or not tm.threats:
+        return []
+    names = {a.id: a.name for a in tm.assets}
+    out = [Paragraph(ui(lang, "threat_model"), st["h2"]),
+           Paragraph(ui(lang, "tm_ai" if tm.generated_by == "ai" else "tm_rules"), st["muted"])]
+    if tm.summary:
+        out.append(Paragraph(_e(tm.summary), st["body"]))
+    flows = [f"{_e(names.get(f.source, f.source))} {'- - &gt;' if f.untrusted else '-&gt;'} {_e(names.get(f.target, f.target))}"
+             + (f" <i>({_e(f.label)})</i>" if f.label else "") for f in tm.flows]
+    out += [Paragraph(f"<b>{_e(ui(lang, 'tm_flow'))}</b>", st["muted"]), Paragraph("<br/>".join(flows), st["small"]),
+            Spacer(1, 2 * mm)]
+    rows = [[ui(lang, "tm_threat"), "OWASP", ui(lang, "severity"), ui(lang, "tm_status")]]
+    rows += [[Paragraph(_e(th.title), st["cell"]), th.owasp or "—",
+              Paragraph(f'<font color="{SEV_COLOR[th.severity.value]}"><b>■</b></font> {th.severity.value}', st["cell"]),
+              ui(lang, th.status)] for th in tm.threats]
+    out.append(_table(rows, [86 * mm, 20 * mm, 30 * mm, 30 * mm]))
+    for th in tm.threats:
+        block = [Paragraph(f"{_e(th.title)} ({_e(th.owasp or '—')})", st["h3"])]
+        block.append(Paragraph(f"<b>{_e(ui(lang, 'tm_path'))}:</b><br/>"
+                               + "<br/>".join(f"{i}. {_e(s)}" for i, s in enumerate(th.attack_path, 1)), st["body"]))
+        block.append(Paragraph(f"<b>{_e(ui(lang, 'tm_mitigations'))}:</b><br/>"
+                               + "<br/>".join(f"• {_e(s)}" for s in th.mitigations), st["body"]))
+        out.append(KeepTogether(block))
+    return out

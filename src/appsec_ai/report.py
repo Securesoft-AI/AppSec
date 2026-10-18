@@ -57,6 +57,7 @@ def to_markdown(result: ScanResult, include_suppressed: bool = False, lang: str 
             out.append(f"| {c.kind} | {c.name} | `{c.file}:{c.line}` |")
         out.append("")
 
+    out += threat_model_markdown(result, lang)
     out += compliance.to_markdown(findings, lang)
 
     out += [f"## {ui(lang, 'findings')}", ""]
@@ -137,3 +138,28 @@ def to_sarif(result: ScanResult) -> dict:
             "results": results,
         }],
     }
+
+
+def threat_model_markdown(result: ScanResult, lang: str = "es") -> list[str]:
+    """RF-2.6: activos y flujo de datos en Mermaid, y cada amenaza con su camino de ataque y mitigaciones."""
+    from appsec_ai.i18n import ui
+    from appsec_ai.threatmodel import mermaid
+
+    tm = result.threat_model
+    if tm is None or not tm.threats:
+        return []
+    out = [f"## {ui(lang, 'threat_model')}", "", f"_{ui(lang, 'tm_ai' if tm.generated_by == 'ai' else 'tm_rules')}_", ""]
+    if tm.summary:
+        out += [tm.summary, ""]
+    out += [f"**{ui(lang, 'tm_flow')}**", "", "```mermaid", mermaid(tm), "```", "",
+            f"| {ui(lang, 'tm_threat')} | OWASP | {ui(lang, 'severity')} | {ui(lang, 'tm_status')} |", "|---|---|---|---|"]
+    out += [f"| {th.title.replace('|', '/')} | {th.owasp} | {SEV_ICON[th.severity.value]} {th.severity.value} | {ui(lang, th.status)} |"
+            for th in tm.threats]
+    out.append("")
+    for th in tm.threats:
+        out += [f"### {th.title} ({th.owasp or '—'})", ""]
+        if th.findings:
+            out += [f"_{ui(lang, 'tm_findings', n=len(th.findings))}_" + (f" · ATLAS {', '.join(th.atlas)}" if th.atlas else ""), ""]
+        out += [f"**{ui(lang, 'tm_path')}**", ""] + [f"{i}. {s}" for i, s in enumerate(th.attack_path, 1)] + [""]
+        out += [f"**{ui(lang, 'tm_mitigations')}**", ""] + [f"- {s}" for s in th.mitigations] + [""]
+    return out

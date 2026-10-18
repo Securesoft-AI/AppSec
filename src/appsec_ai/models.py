@@ -104,6 +104,47 @@ class AIComponent(BaseModel):
     detail: str = ""
 
 
+class TMAsset(BaseModel):
+    """Elemento del modelo de amenazas: actores, el LLM, herramientas, datos..."""
+
+    id: str
+    name: str
+    kind: str  # "actor", "llm", "tool", "data", "external", "secret"
+    detail: str = ""
+    file: str = ""
+    line: int = 0
+
+
+class TMFlow(BaseModel):
+    source: str
+    target: str
+    label: str = ""
+    untrusted: bool = False  # cruza una frontera de confianza (datos que controla un atacante)
+
+
+class TMThreat(BaseModel):
+    id: str
+    title: str
+    owasp: str = ""        # p. ej. "LLM01"
+    severity: Severity = Severity.MEDIUM
+    status: str = "potential"  # "confirmed" (hay hallazgos que lo demuestran) o "potential"
+    assets: list[str] = Field(default_factory=list)
+    attack_path: list[str] = Field(default_factory=list)
+    mitigations: list[str] = Field(default_factory=list)
+    findings: list[str] = Field(default_factory=list)  # huellas de los hallazgos relacionados
+    atlas: list[str] = Field(default_factory=list)
+
+
+class ThreatModel(BaseModel):
+    """RF-2.6: modelo de amenazas del sistema de IA (activos, flujos de datos y caminos de ataque)."""
+
+    generated_by: str = "rules"  # "rules" (determinista) o "ai" (enriquecido con Claude)
+    summary: str = ""
+    assets: list[TMAsset] = Field(default_factory=list)
+    flows: list[TMFlow] = Field(default_factory=list)
+    threats: list[TMThreat] = Field(default_factory=list)
+
+
 class EngineRun(BaseModel):
     engine: str
     status: str  # "ok", "skipped", "error"
@@ -118,4 +159,5 @@ class ScanResult(BaseModel):
     engines: list[EngineRun] = Field(default_factory=list)
     suppressed_inline: int = 0
     ai_summary: str = ""
+    threat_model: ThreatModel | None = None
     llm_usage: dict[str, int] = Field(default_factory=dict)

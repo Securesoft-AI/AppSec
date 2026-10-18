@@ -16,7 +16,7 @@ import re
 
 import httpx
 
-from appsec_ai import redteam
+from appsec_ai import redteam, threatmodel
 from appsec_ai.engines.base import Engine
 from appsec_ai.scanner import ALL_ENGINES, scan as run_scan
 from appsec_ai.service.crypto import seal
@@ -114,7 +114,7 @@ def available_engines(engines: list[str]) -> list[str]:
     return out
 
 
-def scan_demo_repo(db: Database, repo_id: int, services: list[str], requested_by: str) -> Scan:
+def scan_demo_repo(db: Database, repo_id: int, services: list[str], requested_by: str, lang: str = "es") -> Scan:
     """Escaneo inmediato de un repositorio de ejemplo (el código es nuestro: no hace falta el aislamiento)."""
     name, folder = DEMO_REPOS[repo_id]
     services = [s for s in SCAN_SERVICES if s in services]
@@ -123,6 +123,7 @@ def scan_demo_repo(db: Database, repo_id: int, services: list[str], requested_by
     result = result.model_copy(update={
         "findings": [f for f in result.findings if f.category.value in cats],
         "ai_inventory": result.ai_inventory if "ai" in services else [], "target": name})
+    result.threat_model = threatmodel.baseline(result.ai_inventory, result.findings, lang)
     visible = [f for f in result.findings if not f.is_suppressed]
     counts = {sev: sum(f.effective_severity.value == sev for f in visible)
               for sev in ("critical", "high", "medium", "low", "info")}
