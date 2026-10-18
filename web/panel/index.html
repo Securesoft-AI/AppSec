@@ -161,6 +161,7 @@ const I18N = {
     login_title: "Entra en Atalaya", login_github: "Entrar con GitHub", login_user: "Usuario", login_pass: "Contraseña",
     login_demo: "Entrar (demo)", login_or: "o", login_bad: "Usuario o contraseña incorrectos.",
     login_demo_hint: "Modo demostración: usuario «user», contraseña «pass».", login_none: "No hay ninguna forma de entrar configurada.",
+    login_sso: "Entrar con SSO", login_sso_email: "Tu email corporativo", login_sso_bad: "No hay SSO para ese email o el proveedor falló.",
     tab_overview: "Resumen", tab_pentest: "Pentest", tab_plan: "Servicios y plan",
     critical: "Crítico", high: "Alto", medium: "Medio", low: "Bajo", info: "Info", total: "Total",
     trend_title: "Hallazgos abiertos · últimos 30 días", as_table: "Ver como tabla", date: "Fecha",
@@ -231,6 +232,10 @@ const I18N = {
     gl_title: "GitLab", gl_hint: "Crea incidencias en GitLab (gitlab.com o tu instalación). Necesitas la URL base, un token de acceso y el id o la ruta del proyecto.",
     gl_url: "URL base (https://gitlab.com)", gl_token: "Token de acceso", gl_project: "Proyecto (id o grupo/proyecto)",
     gl_create: "Crear incidencia en GitLab", gl_connected: "GitLab conectado ({p}).", gl_none: "GitLab no está conectado.",
+    "a.sso.changed": "SSO cambiado", sso_title: "SSO (OpenID Connect)",
+    sso_hint: "Deja que tu equipo entre con vuestro proveedor de identidad (Okta, Entra ID, Google…). Los usuarios con un email de los dominios permitidos entran sin GitHub.",
+    sso_issuer: "Issuer (https://…)", sso_client: "Client ID", sso_secret: "Client secret", sso_domains: "Dominios permitidos (separados por comas)",
+    sso_connected: "SSO conectado ({p}).", sso_none: "SSO no está configurado.", sso_redirect: "URL de redirección (para el proveedor): {u}",
     "a.bitbucket.changed": "Bitbucket cambiado", "a.bitbucket.issue_created": "Incidencia de Bitbucket creada",
     bb_title: "Bitbucket", bb_hint: "Crea incidencias en Bitbucket Cloud. Necesitas el workspace, el repositorio, tu usuario y un app password. Las incidencias deben estar activadas en el repositorio.",
     bb_workspace: "Workspace", bb_repo: "Repositorio", bb_user: "Usuario", bb_pass: "App password",
@@ -241,6 +246,7 @@ const I18N = {
     login_title: "Sign in to Atalaya", login_github: "Sign in with GitHub", login_user: "User", login_pass: "Password",
     login_demo: "Sign in (demo)", login_or: "or", login_bad: "Wrong user or password.",
     login_demo_hint: "Demo mode: user “user”, password “pass”.", login_none: "No sign-in method is configured.",
+    login_sso: "Sign in with SSO", login_sso_email: "Your work email", login_sso_bad: "No SSO for that email or the provider failed.",
     tab_overview: "Overview", tab_pentest: "Pentest", tab_plan: "Services & plan",
     critical: "Critical", high: "High", medium: "Medium", low: "Low", info: "Info", total: "Total",
     trend_title: "Open findings · last 30 days", as_table: "View as table", date: "Date",
@@ -311,6 +317,10 @@ const I18N = {
     gl_title: "GitLab", gl_hint: "Create GitLab issues (gitlab.com or your own instance). You need the base URL, an access token and the project id or path.",
     gl_url: "Base URL (https://gitlab.com)", gl_token: "Access token", gl_project: "Project (id or group/project)",
     gl_create: "Create GitLab issue", gl_connected: "GitLab connected ({p}).", gl_none: "GitLab not connected.",
+    "a.sso.changed": "SSO changed", sso_title: "SSO (OpenID Connect)",
+    sso_hint: "Let your team sign in with your identity provider (Okta, Entra ID, Google…). Users with an email in the allowed domains sign in without GitHub.",
+    sso_issuer: "Issuer (https://…)", sso_client: "Client ID", sso_secret: "Client secret", sso_domains: "Allowed domains (comma-separated)",
+    sso_connected: "SSO connected ({p}).", sso_none: "SSO not configured.", sso_redirect: "Redirect URL (for the provider): {u}",
     "a.bitbucket.changed": "Bitbucket changed", "a.bitbucket.issue_created": "Bitbucket issue created",
     bb_title: "Bitbucket", bb_hint: "Create Bitbucket Cloud issues. You need the workspace, the repository, your username and an app password. Issues must be enabled on the repository.",
     bb_workspace: "Workspace", bb_repo: "Repository", bb_user: "Username", bb_pass: "App password",
@@ -361,7 +371,7 @@ function applyLang() {
 async function showLogin() {
   state.me = null;
   for (const id of ["logout", "inst", "gh-lang-wrap", "tabs"]) $(id).hidden = true;
-  const cfg = await fetch("/auth/config").then((r) => r.json()).catch(() => ({ github: false, demo: false }));
+  const cfg = await fetch("/auth/config").then((r) => r.json()).catch(() => ({ github: false, demo: false, sso: false }));
   const msg = el("p", { class: "notice", hidden: true });
   const user = el("input", { autocomplete: "username", name: "username", required: true });
   const pass = el("input", { type: "password", autocomplete: "current-password", name: "password", required: true });
@@ -374,12 +384,27 @@ async function showLogin() {
     el("label", {}, t("login_user"), user), el("label", {}, t("login_pass"), pass),
     el("button", { class: "btn primary", type: "submit" }, t("login_demo")),
     el("p", { class: "muted" }, t("login_demo_hint")));
+  const ssoEmail = el("input", { type: "email", name: "sso-email", required: true, placeholder: "tú@tuempresa.com" });
+  const ssoForm = el("form", { class: "login-form", onsubmit: async (e) => {
+      e.preventDefault();
+      try {
+        const r = await fetch("/auth/sso/start", { method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: ssoEmail.value }) });
+        if (!r.ok) throw new Error();
+        location.href = (await r.json()).url;
+      } catch { msg.textContent = t("login_sso_bad"); msg.hidden = false; }
+    } },
+    el("label", {}, t("login_sso_email"), ssoEmail),
+    el("button", { class: "btn primary", type: "submit" }, t("login_sso")));
+  const anyPrev = cfg.github || cfg.demo;
   $("main").replaceChildren(el("section", { class: "card" }, el("div", { class: "login" },
     el("h1", {}, t("login_title")), msg,
     cfg.github ? el("a", { class: "btn primary", href: "/auth/login" }, t("login_github")) : "",
     cfg.github && cfg.demo ? el("p", { class: "or" }, t("login_or")) : "",
     cfg.demo ? form : "",
-    !cfg.github && !cfg.demo ? el("p", { class: "muted" }, t("login_none")) : "")));
+    cfg.sso && anyPrev ? el("p", { class: "or" }, t("login_or")) : "",
+    cfg.sso ? ssoForm : "",
+    !cfg.github && !cfg.demo && !cfg.sso ? el("p", { class: "muted" }, t("login_none")) : "")));
 }
 
 // -- arranque y navegación ---------------------------------------------------------------------
@@ -979,7 +1004,34 @@ function viewIntegrations() {
 
   $("main").replaceChildren(
     el("section", { class: "card" }, el("h2", {}, t("int_title")), el("p", { class: "muted" }, t("int_intro"))),
-    slackCard(), destCard("jira"), destCard("gitlab"), bitbucketCard());
+    slackCard(), destCard("jira"), destCard("gitlab"), bitbucketCard(), ssoCard());
+
+  function ssoCard() {
+    const msg = notice();
+    const f = { issuer: el("input", { type: "url", maxlength: 300, class: "full" }),
+                client_id: el("input", { maxlength: 300 }),
+                client_secret: el("input", { type: "password", maxlength: 500, autocomplete: "off" }),
+                domains: el("input", { maxlength: 400, placeholder: "tuempresa.com, filial.com" }) };
+    const pill = el("span", { class: "pill off" });
+    const load = (c) => { const on = !!c.configured; pill.className = "pill " + (on ? "on" : "off");
+      pill.textContent = on ? t("sso_connected", { p: (c.domains || []).join(", ") }) : t("sso_none");
+      f.issuer.value = c.issuer || ""; f.client_id.value = c.client_id || ""; f.client_secret.value = "";
+      f.domains.value = (c.domains || []).join(", "); };
+    api(base("/sso")).then(load).catch(() => load({}));
+    const save = async (clear) => { try {
+        const body = clear ? { issuer: "", client_id: "", client_secret: "", domains: [] }
+          : { issuer: f.issuer.value, client_id: f.client_id.value, client_secret: f.client_secret.value,
+              domains: f.domains.value.split(/[,\s]+/).filter(Boolean) };
+        load(await api(base("/sso"), { method: "PATCH", body: JSON.stringify(body) })); show(msg, t("notif_saved")); }
+      catch (e) { show(msg, t("error") + e.message, false); } };
+    return card(t("sso_title"), t("sso_hint"), pill,
+      [msg, el("p", { class: "muted mono" }, t("sso_redirect", { u: location.origin + "/auth/sso/callback" })),
+       el("div", { class: "form" }, el("label", { class: "full" }, t("sso_issuer"), f.issuer),
+         el("label", {}, t("sso_client"), f.client_id), el("label", {}, t("sso_secret"), f.client_secret),
+         el("label", { class: "full" }, t("sso_domains"), f.domains))],
+      [el("button", { class: "btn primary", type: "button", onclick: () => save(false) }, t("notif_save")),
+       el("button", { class: "btn", type: "button", onclick: () => save(true) }, t("notif_clear"))]);
+  }
 }
 
 function auditCard() {

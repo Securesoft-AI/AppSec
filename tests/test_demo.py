@@ -22,7 +22,7 @@ def test_demo_login_shows_only_the_example_organization(tmp_path):
     client, db = make(tmp_path)
     with db.session() as s, s.begin():
         s.add(Installation(id=7, account_login="cliente-real"))
-    assert client.get("/auth/config").json() == {"github": False, "demo": True}
+    assert client.get("/auth/config").json() == {"github": False, "demo": True, "sso": True}
     assert client.post("/auth/demo", json={"username": "user", "password": "mal"}).status_code == 401
     assert client.post("/auth/demo", json={"username": "user", "password": "pass"}).status_code == 200
     me = client.get("/api/me").json()

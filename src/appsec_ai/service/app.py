@@ -4,14 +4,15 @@ from __future__ import annotations
 
 import datetime as dt
 import hmac
-from collections import Counter
 import json
 import logging
 import os
 import re
 import time
-from collections import defaultdict, deque
+from collections import Counter, defaultdict, deque
 from pathlib import Path
+
+import jwt
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
@@ -33,6 +34,7 @@ from appsec_ai.service import integrations
 from appsec_ai.service.jira import Jira
 from appsec_ai.service.gitlab import Gitlab
 from appsec_ai.service.bitbucket import Bitbucket
+from appsec_ai.service import oidc
 from appsec_ai import redteam
 from appsec_ai.service.github import GitHubApp, GitHubError
 from appsec_ai.service import demo, plans
@@ -130,6 +132,17 @@ class NotificationsIn(BaseModel):
     slack_webhook: str = Field(default="", max_length=500)
 
 
+class SsoStartIn(BaseModel):
+    email: str = Field(min_length=3, max_length=320)
+
+
+class SsoConfigIn(BaseModel):
+    issuer: str = Field(default="", max_length=300)
+    client_id: str = Field(default="", max_length=300)
+    client_secret: str = Field(default="", max_length=500)
+    domains: list[str] = Field(default_factory=list, max_length=50)
+
+
 class JiraConfigIn(BaseModel):
     base_url: str = Field(default="", max_length=300)
     email: str = Field(default="", max_length=320)
@@ -215,6 +228,9 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
     auth = Authenticator(settings.session_secret, admin_token, settings.public_url, settings.staff_logins)
     github = github or GitHubApp(settings.github_app_id, settings.github_private_key, settings.github_api_url)
     login_enabled = bool(settings.github_client_id and settings.github_client_secret and settings.session_secret)
+    sso_enabled = bool(settings.session_secret)
+    SSO_STATE_COOKIE = "appsec_sso_state"
+    sso_redirect = f"{settings.public_url}/auth/sso/callback"
     secure_cookies = settings.public_url.startswith("https://")
     callback_url = f"{settings.public_url}/auth/callback"
     if stripe is None and settings.stripe_secret_key:
@@ -298,7 +314,77 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
 
     @app.get("/auth/config", include_in_schema=False)
     def auth_config():
-        return {"github": login_enabled, "demo": settings.demo_login}
+        return {"github": login_enabled, "demo": settings.demo_login, "sso": sso_enabled}
+
+    # -- SSO con OIDC (RF-4.8) --------------------------------------------------------------------
+
+    def _find_sso_installation(email: str):
+        """Instalación cuyo SSO admite el dominio del email (busca entre todas las configuradas)."""
+        domain = email.rsplit("@", 1)[1].lower() if "@" in email else ""
+        if not domain:
+            return None, {}
+        with db.session() as s:
+            for inst in s.scalars(select(Installation)).all():
+                cfg = unseal(db.cipher, inst.oidc_config) or {}
+                if cfg and domain in {d.strip().lower() for d in cfg.get("domains", []) if d.strip()}:
+                    return inst.id, cfg
+        return None, {}
+
+    @app.post("/auth/sso/start", include_in_schema=False)
+    def sso_start(data: SsoStartIn):
+        if not sso_enabled:
+            raise HTTPException(status_code=404, detail="no disponible")
+        email = data.email.strip().lower()
+        installation_id, cfg = _find_sso_installation(email)
+        if not installation_id:
+            raise HTTPException(status_code=404, detail="no hay SSO configurado para ese dominio")
+        try:
+            meta = oidc.discover(cfg["issuer"])
+        except oidc.OIDCError:
+            log.exception("descubrimiento OIDC falló")
+            raise HTTPException(status_code=502, detail="no se pudo contactar con el proveedor de identidad") from None
+        state, nonce = oidc.random_state(), oidc.random_nonce()
+        url = oidc.authorization_url(meta, cfg["client_id"], sso_redirect, state, nonce)
+        ticket = jwt.encode({"inst": installation_id, "st": state, "nonce": nonce, "exp": int(time.time()) + 600},
+                            settings.session_secret, algorithm="HS256")
+        resp = JSONResponse({"url": url})
+        resp.set_cookie(SSO_STATE_COOKIE, ticket, max_age=600, httponly=True, secure=secure_cookies, samesite="lax")
+        return resp
+
+    @app.get("/auth/sso/callback", include_in_schema=False)
+    def sso_callback(request: Request, code: str = "", state: str = ""):
+        ticket = request.cookies.get(SSO_STATE_COOKIE, "")
+        try:
+            data = jwt.decode(ticket, settings.session_secret, algorithms=["HS256"], options={"require": ["exp"]})
+        except jwt.PyJWTError:
+            raise HTTPException(status_code=400, detail="sesión de login caducada; vuelve a intentarlo") from None
+        if not code or not state or not hmac.compare_digest(state, data.get("st", "")):
+            raise HTTPException(status_code=400, detail="login SSO no válido")
+        installation_id = int(data["inst"])
+        with db.session() as s:
+            inst = s.get(Installation, installation_id)
+            cfg = unseal(db.cipher, inst.oidc_config) if inst else {}
+        if not cfg:
+            raise HTTPException(status_code=400, detail="el SSO de esta organización ya no está disponible")
+        try:
+            meta = oidc.discover(cfg["issuer"])
+            id_token = oidc.exchange_code(meta, cfg["client_id"], cfg["client_secret"], code, sso_redirect)
+            claims = oidc.verify_id_token(id_token, meta, cfg["client_id"], cfg["issuer"], data.get("nonce", ""))
+        except oidc.OIDCError:
+            log.exception("verificación OIDC falló")
+            raise HTTPException(status_code=401, detail="el proveedor no validó el acceso") from None
+        email = oidc.allowed_email(claims, cfg.get("domains", []))
+        if not email:
+            raise HTTPException(status_code=403, detail="tu email no está autorizado para esta organización")
+        resp = RedirectResponse("/app", status_code=302)
+        resp.delete_cookie(SSO_STATE_COOKIE)
+        resp.set_cookie(SESSION_COOKIE, encode_session(settings.session_secret, {"id": 0, "login": email},
+                                                       [installation_id]),
+                        max_age=SESSION_TTL, httponly=True, secure=secure_cookies, samesite="lax")
+        db.audit(installation_id, email, "auth.login", detail={"mode": "sso"},
+                 ip=request.client.host if request.client else "")
+        log.info("login SSO de %s en la instalación %s", email, installation_id)
+        return resp
 
     @app.post("/auth/demo", include_in_schema=False)
     def demo_login(data: DemoLoginIn, request: Request):
@@ -996,6 +1082,33 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
     @app.post("/api/scans/{scan_id}/bitbucket")
     def create_bitbucket_issue(scan_id: int, data: IssueIn, principal: Principal = Depends(auth)):
         return _create_issue("bitbucket", scan_id, data.fingerprint, principal)
+
+    # -- configuración de SSO (OIDC) por organización ---------------------------------------------
+
+    @app.get("/api/installations/{installation_id}/sso")
+    def get_sso(installation_id: int, principal: Principal = Depends(auth)):
+        with db.session() as s:
+            cfg = unseal(db.cipher, visible_installation(s, principal, installation_id).oidc_config) or {}
+        return {"configured": bool(cfg), "issuer": cfg.get("issuer", ""), "client_id": cfg.get("client_id", ""),
+                "domains": cfg.get("domains", [])}
+
+    @app.patch("/api/installations/{installation_id}/sso")
+    def set_sso(installation_id: int, data: SsoConfigIn, principal: Principal = Depends(auth)):
+        issuer = data.issuer.strip().rstrip("/")
+        domains = sorted({d.strip().lower() for d in data.domains if d.strip() and "." in d})
+        filled = [bool(issuer), bool(data.client_id.strip()), bool(data.client_secret.strip()), bool(domains)]
+        if any(filled) and not all(filled):
+            raise HTTPException(status_code=422, detail="faltan datos de SSO (issuer, client_id, client_secret y dominios)")
+        if issuer and not issuer.startswith("https://"):
+            raise HTTPException(status_code=422, detail="el issuer debe ser https")
+        cfg = {"issuer": issuer, "client_id": data.client_id.strip(), "client_secret": data.client_secret.strip(),
+               "domains": domains} if all(filled) else {}
+        with db.session() as s, s.begin():
+            inst = visible_installation(s, principal, installation_id)
+            inst.oidc_config = seal(db.cipher, cfg) if cfg else {}
+            db.audit(installation_id, principal.login, "sso.changed", issuer,
+                     {"configured": bool(cfg), "domains": domains}, session=s)
+            return {"configured": bool(cfg), "issuer": issuer, "client_id": cfg.get("client_id", ""), "domains": domains}
 
     # -- planes y facturación (RF-4.5) ------------------------------------------------------------
 

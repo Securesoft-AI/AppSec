@@ -152,6 +152,13 @@ ejecuciones desde la misma cola que los escaneos. La verificación DNS usa `dnsp
 - `SCAN_SANDBOX_CMD` envuelve ese subproceso con un sandbox del sistema. Ejemplo con bubblewrap (hay que
   instalarlo en la imagen): `bwrap --unshare-all --share-net --die-with-parent --ro-bind / / --dev /dev --proc /proc --tmpfs /tmp --bind {src} {src}`.
   Así el escaneo solo puede escribir en su directorio.
+- **SSO con OpenID Connect** (RF-4.8): cada organización conecta su proveedor de identidad desde el panel
+  (*Integraciones → SSO*): issuer, client_id, client_secret y los dominios de email permitidos. En el
+  proveedor hay que registrar la URL de redirección `https://<tu-dominio>/auth/sso/callback` (el panel la
+  muestra). El usuario escribe su email corporativo y entra por su IdP; al volver se verifica el id_token
+  (firma RS256 contra el JWKS del proveedor, emisor, público, caducidad y nonce) y que el email está
+  verificado y su dominio permitido. La sesión queda limitada a esa organización. El secreto se guarda
+  cifrado. Requiere `SESSION_SECRET` configurado. Soporta OIDC; SAML queda pendiente.
 - **Registros de auditoría** (RF-4.8): cada acción sensible (inicio de sesión, escaneo solicitado, cambios en
   pentests y red team, facturación y ajustes) se guarda en la tabla `audit_log`, que es de solo añadir: la
   aplicación no tiene ningún endpoint para modificar ni borrar entradas. Cada organización ve su propia
