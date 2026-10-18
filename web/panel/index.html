@@ -221,6 +221,10 @@ const I18N = {
     notif_title: "Avisos en Slack", notif_hint: "Pega un webhook entrante de Slack (https://hooks.slack.com/…). Te avisamos de escaneos con hallazgos graves, pentests y red team.",
     notif_connected: "Slack conectado.", notif_none: "Slack no está conectado.", notif_save: "Guardar", notif_test: "Enviar prueba",
     notif_saved: "Guardado.", notif_tested: "Mensaje de prueba enviado a Slack.", notif_clear: "Quitar",
+    jira_title: "Jira", jira_hint: "Crea incidencias en Jira desde los hallazgos. Necesitas la URL del sitio, tu email, un token de API y la clave del proyecto.",
+    jira_url: "URL del sitio (https://tuempresa.atlassian.net)", jira_email: "Email", jira_token: "Token de API", jira_project: "Clave del proyecto (p. ej. SEC)",
+    jira_connected: "Jira conectado ({p}).", jira_none: "Jira no está conectado.", jira_create: "Crear incidencia en Jira",
+    jira_creating: "Creando…", jira_created: "Incidencia creada: {k}", "a.jira.changed": "Jira cambiado", "a.jira.issue_created": "Incidencia de Jira creada", "a.notifications.changed": "Notificaciones cambiadas",
   },
   en: {
     logout: "Sign out", gh_lang: "GitHub language",
@@ -287,6 +291,10 @@ const I18N = {
     notif_title: "Slack alerts", notif_hint: "Paste a Slack incoming webhook (https://hooks.slack.com/…). We ping you on scans with serious findings, pentests and red team.",
     notif_connected: "Slack connected.", notif_none: "Slack not connected.", notif_save: "Save", notif_test: "Send test",
     notif_saved: "Saved.", notif_tested: "Test message sent to Slack.", notif_clear: "Remove",
+    jira_title: "Jira", jira_hint: "Create Jira issues from findings. You need the site URL, your email, an API token and the project key.",
+    jira_url: "Site URL (https://yourcompany.atlassian.net)", jira_email: "Email", jira_token: "API token", jira_project: "Project key (e.g. SEC)",
+    jira_connected: "Jira connected ({p}).", jira_none: "Jira not connected.", jira_create: "Create Jira issue",
+    jira_creating: "Creating…", jira_created: "Issue created: {k}", "a.jira.changed": "Jira changed", "a.jira.issue_created": "Jira issue created", "a.notifications.changed": "Notifications changed",
   },
 };
 let lang = (() => { try { return localStorage.getItem("lang") || (navigator.language || "es").slice(0, 2); } catch { return "es"; } })();
@@ -317,7 +325,7 @@ async function api(path, opts = {}) {
 }
 
 // -- estado -----------------------------------------------------------------------------------
-const state = { me: null, catalog: null, dash: null, billing: null, view: "overview", param: null, scans: {} };
+const state = { me: null, catalog: null, dash: null, billing: null, view: "overview", param: null, scans: {}, jira: null };
 const svc = (key) => state.catalog.services.find((s) => s.key === key);
 const instId = () => $("inst").value;
 const entitled = (key) => state.billing.services.includes(key);
@@ -378,9 +386,10 @@ async function loadInstallation(view = null, param = null) {
   const inst = state.me.installations.find((i) => String(i.id) === instId());
   $("gh-lang").value = inst ? inst.language : "es";
   $("gh-lang-wrap").hidden = false;
-  [state.dash, state.billing] = await Promise.all([
+  [state.dash, state.billing, state.jira] = await Promise.all([
     api(`/api/installations/${encodeURIComponent(instId())}/dashboard`),
-    api(`/api/installations/${encodeURIComponent(instId())}/billing`)]);
+    api(`/api/installations/${encodeURIComponent(instId())}/billing`),
+    api(`/api/installations/${encodeURIComponent(instId())}/jira`).catch(() => ({ configured: false }))]);
   state.scans = {};
   renderTabs();
   if (view) go(view, param); else go(state.view === "repo" ? "overview" : state.view, state.view === "repo" ? null : state.param);
@@ -566,6 +575,12 @@ function renderFinding(scanId, f, feedback) {
     el("div", { class: "vote" },
       el("button", { class: "btn", type: "button", "aria-pressed": String(feedback[fp] === true), onclick: vote(true) }, "👍 " + t("useful")),
       el("button", { class: "btn", type: "button", "aria-pressed": String(feedback[fp] === false), onclick: vote(false) }, "👎 " + t("not_useful")),
+      (state.jira && state.jira.configured) ? el("button", { class: "btn", type: "button", onclick: async (evt) => {
+        const btn = evt.target; btn.disabled = true; const was = btn.textContent; btn.textContent = t("jira_creating");
+        try { const r = await api(`/api/scans/${scanId}/jira`, { method: "POST", body: JSON.stringify({ fingerprint: fp }) });
+          btn.replaceWith(el("a", { class: "btn", href: r.url, target: "_blank", rel: "noopener" }, t("jira_created", { k: r.key }))); }
+        catch (e) { btn.disabled = false; btn.textContent = was; alert(t("error") + e.message); }
+      } }, t("jira_create")) : "",
       el("span", { class: "muted" }, "")));
 }
 
@@ -834,7 +849,47 @@ function viewPlan() {
     el("section", {}, el("h2", {}, t("bundles")), bundles),
     el("section", {}, el("h2", {}, t("choose")), services),
     notificationsCard(),
+    jiraCard(),
     auditCard());
+}
+
+function jiraCard() {
+  const msg = el("p", { class: "notice ok", hidden: true });
+  const f = {
+    base_url: el("input", { type: "url", maxlength: 300, class: "full" }),
+    email: el("input", { type: "email", maxlength: 320 }),
+    token: el("input", { type: "password", maxlength: 500, autocomplete: "off" }),
+    project_key: el("input", { maxlength: 50, placeholder: "SEC" }),
+  };
+  const state2 = el("span", { class: "pill off" }, t("jira_none"));
+  const base = () => `/api/installations/${encodeURIComponent(instId())}/jira`;
+  const show = (text, ok = true) => { msg.textContent = text; msg.className = "notice" + (ok ? " ok" : ""); msg.hidden = false; };
+  const setState = (j) => {
+    state2.className = "pill " + (j.configured ? "on" : "off");
+    state2.textContent = j.configured ? t("jira_connected", { p: j.project_key }) : t("jira_none");
+    if (j.configured) { f.base_url.value = j.base_url; f.project_key.value = j.project_key; f.token.value = ""; }
+  };
+  setState(state.jira || { configured: false });
+  return el("section", { class: "card" }, el("div", { class: "toolbar" }, el("h2", {}, t("jira_title")), state2),
+    el("p", { class: "muted" }, t("jira_hint")), msg,
+    el("div", { class: "form" },
+      el("label", { class: "full" }, t("jira_url"), f.base_url), el("label", {}, t("jira_email"), f.email),
+      el("label", {}, t("jira_token"), f.token), el("label", {}, t("jira_project"), f.project_key)),
+    el("div", { class: "toolbar" },
+      el("button", { class: "btn primary", type: "button", onclick: async () => {
+        try { const r = await api(base(), { method: "PATCH", body: JSON.stringify(Object.fromEntries(
+          Object.entries(f).map(([k, n]) => [k, n.value]))) }); state.jira = r; setState(r); show(t("notif_saved")); }
+        catch (e) { show(t("error") + e.message, false); }
+      } }, t("notif_save")),
+      el("button", { class: "btn", type: "button", onclick: async () => {
+        try { await api(base() + "/test", { method: "POST" }); show(t("notif_tested")); }
+        catch (e) { show(t("error") + e.message, false); }
+      } }, t("notif_test")),
+      el("button", { class: "btn", type: "button", onclick: async () => {
+        try { const r = await api(base(), { method: "PATCH", body: JSON.stringify({ base_url: "", email: "", token: "", project_key: "" }) });
+          state.jira = r; setState(r); Object.values(f).forEach((n) => (n.value = "")); show(t("notif_saved")); }
+        catch (e) { show(t("error") + e.message, false); }
+      } }, t("notif_clear"))));
 }
 
 function notificationsCard() {

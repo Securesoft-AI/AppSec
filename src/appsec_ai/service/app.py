@@ -29,6 +29,7 @@ from appsec_ai.service.db import (Database, FindingFeedback, FixRequest, Install
                                   AuditLog, RedTeamRun, RedTeamTarget, Repository, Scan, ScanKind, ScanStatus,
                                   WaitlistEntry, utcnow)
 from appsec_ai.service import notify, ownership
+from appsec_ai.service.jira import Jira, JiraError, finding_adf
 from appsec_ai import redteam
 from appsec_ai.service.github import GitHubApp, GitHubError
 from appsec_ai.service import demo, plans
@@ -124,6 +125,17 @@ class RedTeamTargetIn(BaseModel):
 
 class NotificationsIn(BaseModel):
     slack_webhook: str = Field(default="", max_length=500)
+
+
+class JiraConfigIn(BaseModel):
+    base_url: str = Field(default="", max_length=300)
+    email: str = Field(default="", max_length=320)
+    token: str = Field(default="", max_length=500)
+    project_key: str = Field(default="", max_length=50, pattern=r"^[A-Z0-9_]*$")
+
+
+class JiraIssueIn(BaseModel):
+    fingerprint: str = Field(min_length=4, max_length=64, pattern=r"^[0-9a-f]+$")
 
 
 class CheckoutIn(BaseModel):
@@ -826,6 +838,74 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
         if not ok:
             raise HTTPException(status_code=502, detail="Slack no aceptó el mensaje de prueba")
         return {"ok": True}
+
+    # -- integración con Jira (RF-4.8) ------------------------------------------------------------
+
+    def _jira_cfg(inst: Installation) -> dict:
+        return unseal(db.cipher, inst.jira_config) or {}
+
+    def _jira_client(cfg: dict) -> Jira:
+        return Jira(cfg["base_url"], cfg["email"], cfg["token"])
+
+    @app.get("/api/installations/{installation_id}/jira")
+    def get_jira(installation_id: int, principal: Principal = Depends(auth)):
+        with db.session() as s:
+            cfg = _jira_cfg(visible_installation(s, principal, installation_id))
+        return {"configured": bool(cfg), "base_url": cfg.get("base_url", ""), "project_key": cfg.get("project_key", "")}
+
+    @app.patch("/api/installations/{installation_id}/jira")
+    def set_jira(installation_id: int, data: JiraConfigIn, principal: Principal = Depends(auth)):
+        base = data.base_url.strip().rstrip("/")
+        filled = [bool(base), bool(data.email.strip()), bool(data.token.strip()), bool(data.project_key.strip())]
+        if any(filled) and not all(filled):
+            raise HTTPException(status_code=422, detail="faltan datos de Jira (URL, email, token y proyecto)")
+        if base and not base.startswith("https://"):
+            raise HTTPException(status_code=422, detail="la URL de Jira debe ser https")
+        with db.session() as s, s.begin():
+            inst = visible_installation(s, principal, installation_id)
+            cfg = {"base_url": base, "email": data.email.strip(), "token": data.token.strip(),
+                   "project_key": data.project_key.strip()} if all(filled) else {}
+            inst.jira_config = seal(db.cipher, cfg) if cfg else {}
+            db.audit(installation_id, principal.login, "jira.changed", cfg.get("project_key", ""),
+                     {"configured": bool(cfg)}, session=s)
+            return {"configured": bool(cfg), "base_url": cfg.get("base_url", ""),
+                    "project_key": cfg.get("project_key", "")}
+
+    @app.post("/api/installations/{installation_id}/jira/test")
+    def test_jira(installation_id: int, principal: Principal = Depends(auth)):
+        with db.session() as s:
+            cfg = _jira_cfg(visible_installation(s, principal, installation_id))
+        if not cfg:
+            raise HTTPException(status_code=409, detail="Jira no está configurado")
+        if not _jira_client(cfg).check(cfg["project_key"]):
+            raise HTTPException(status_code=502, detail="Jira no aceptó las credenciales o el proyecto")
+        return {"ok": True}
+
+    @app.post("/api/scans/{scan_id}/jira")
+    def create_jira_issue(scan_id: int, data: JiraIssueIn, principal: Principal = Depends(auth)):
+        with db.session() as s:
+            scan = visible_scan(s, principal, scan_id)
+            repo = s.get(Repository, scan.repository_id)
+            inst = s.get(Installation, repo.installation_id)
+            cfg, lang, repo_name = _jira_cfg(inst), principal_lang(inst), repo.full_name
+            result = unseal(db.cipher, scan.result) if scan.result else None
+        if not cfg:
+            raise HTTPException(status_code=409, detail="Jira no está configurado")
+        finding = next((f for f in (result or {}).get("findings", []) if f.get("fingerprint") == data.fingerprint), None)
+        if finding is None:
+            raise HTTPException(status_code=404, detail="hallazgo no encontrado en este escaneo")
+        summary = f"[{finding.get('severity', '')}] {finding.get('title', '')} — {repo_name}"
+        labels = ["appsec-ai", str(finding.get("severity", "")), str(finding.get("category", ""))]
+        try:
+            issue = _jira_client(cfg).create_issue(cfg["project_key"], summary,
+                                                   finding_adf(finding, repo_name, lang),
+                                                   [l for l in labels if l])
+        except JiraError as e:
+            log.warning("no se pudo crear la incidencia en Jira: %s", e)
+            raise HTTPException(status_code=502, detail="Jira no pudo crear la incidencia") from None
+        db.audit(repo.installation_id, principal.login, "jira.issue_created", issue["key"],
+                 {"scan": scan_id, "fingerprint": data.fingerprint})
+        return issue
 
     # -- planes y facturación (RF-4.5) ------------------------------------------------------------
 
