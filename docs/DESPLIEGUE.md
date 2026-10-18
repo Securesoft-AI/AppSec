@@ -144,6 +144,13 @@ ejecuciones desde la misma cola que los escaneos. La verificación DNS usa `dnsp
 - El código del cliente se clona en un directorio temporal que se borra siempre, también si hay errores. Se descartan el historial, los hooks, LFS y los enlaces simbólicos.
 - El worker se ejecuta sin privilegios (`uid 10001`) y con límites de memoria, CPU y tamaño del repositorio.
 - El triage con IA trata el código del cliente como datos no confiables (defensa frente a prompt injection).
+- **Salida protegida frente a SSRF**: las llamadas a URLs que escribe el cliente (Jira, GitLab, el issuer del SSO,
+  la verificación y las sondas del red team) solo se conectan a IPs públicas. La comprobación se hace al abrir cada
+  conexión, con la IP ya resuelta, así que también cubre el DNS rebinding; no se siguen redirecciones. Si tienes
+  Jira o GitLab en tu red interna (instalación propia), `EGRESS_ALLOW_PRIVATE=1` desactiva el bloqueo.
+- **Dominios del SSO verificados**: un dominio solo sirve para entrar por SSO cuando la organización ha publicado el
+  registro DNS TXT que le damos, y nunca puede estar verificado por dos organizaciones a la vez. Así nadie puede
+  reclamar el dominio de otra empresa y mandar a sus empleados a su proveedor de identidad.
 - **Escaneo aislado** (`SCAN_SANDBOX=subprocess`, por defecto): los motores analizan el código en un subproceso
   sin secretos en el entorno (ni la clave de la GitHub App, ni la de Anthropic, ni `DATABASE_URL`), en Python
   aislado (`-I`, para que el repositorio no pueda suplantar módulos), en su propia sesión de procesos que se
@@ -159,6 +166,11 @@ ejecuciones desde la misma cola que los escaneos. La verificación DNS usa `dnsp
   (firma RS256 contra el JWKS del proveedor, emisor, público, caducidad y nonce) y que el email está
   verificado y su dominio permitido. La sesión queda limitada a esa organización. El secreto se guarda
   cifrado. Requiere `SESSION_SECRET` configurado. Soporta OIDC; SAML queda pendiente.
+  El proveedor tiene que enviar `email_verified: true` (sin ese claim no se entra). En Microsoft Entra ID
+  añade el claim opcional `email` y usa usuarios con el email verificado. Cada dominio se verifica con un
+  registro DNS TXT ligado al issuer y al client_id: si alguien cambia el proveedor, los dominios dejan de
+  estar verificados hasta que quien controla el DNS publique el registro nuevo. `/auth/sso/start` tiene un
+  límite de peticiones por IP, y las respuestas del proveedor, un tamaño y un plazo máximos.
 - **Registros de auditoría** (RF-4.8): cada acción sensible (inicio de sesión, escaneo solicitado, cambios en
   pentests y red team, facturación y ajustes) se guarda en la tabla `audit_log`, que es de solo añadir: la
   aplicación no tiene ningún endpoint para modificar ni borrar entradas. Cada organización ve su propia

@@ -294,11 +294,16 @@ class Worker:
     def process_redteam(self, run_id: int):
         """Lanza las sondas de red teaming contra el endpoint ya verificado del cliente (RF-2.7)."""
         from appsec_ai import redteam
+        from appsec_ai.egress import safe_transport
         from appsec_ai.service.db import RedTeamRun, RedTeamTarget
+
+        from appsec_ai.service import demo
 
         with self.db.session() as s:
             run = s.get(RedTeamRun, run_id)
             installation_id = run.installation_id
+            if demo.is_demo(installation_id):  # la demo nunca sale a la red: se resuelve en la API
+                return self._finish_redteam(run_id, summary={}, result=None, error="la demo no lanza ataques reales")
             tgt = s.get(RedTeamTarget, run.target_id)
             if tgt is None:
                 return self._finish_redteam(run_id, summary={}, result=None, error="el objetivo ya no existe")
@@ -308,7 +313,7 @@ class Worker:
             target = redteam.Target(url=tgt.url, method=tgt.method, headers=unseal(self.db.cipher, tgt.headers) or {},
                                     body_template=tgt.body_template, response_path=tgt.response_path,
                                     timeout=self.settings.redteam_timeout)
-        results = redteam.run_redteam(target)
+        results = redteam.run_redteam(target, transport=safe_transport())
         summary = redteam.summarize(results)
         payload = {"probes": [vars(r) for r in results], "target": {"url": tgt.url, "host": tgt.host}}
         self._finish_redteam(run_id, summary=summary, result=payload)

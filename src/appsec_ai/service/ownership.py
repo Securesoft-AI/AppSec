@@ -14,12 +14,13 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-import ipaddress
 import re
 import socket
 from urllib.parse import urlparse
 
 import httpx
+
+from appsec_ai.egress import is_public_ip, safe_transport
 
 WELL_KNOWN = "/.well-known/appsec-ai-challenge.txt"
 DNS_PREFIX = "appsec-ai-challenge="
@@ -58,21 +59,13 @@ def is_public_host(host: str, resolver=socket.getaddrinfo) -> bool:
     addresses = {info[4][0] for info in infos}
     if not addresses:
         return False
-    for addr in addresses:
-        try:
-            ip = ipaddress.ip_address(addr)
-        except ValueError:
-            return False
-        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast \
-                or ip.is_unspecified:
-            return False
-    return True
+    return all(is_public_ip(addr) for addr in addresses)
 
 
 def verify_http(host: str, token: str, transport: httpx.BaseTransport | None = None) -> bool:
     try:
-        with httpx.Client(transport=transport, timeout=10, follow_redirects=False,
-                          trust_env=transport is None) as client:
+        with httpx.Client(transport=transport or safe_transport(), timeout=10, follow_redirects=False,
+                          trust_env=False) as client:
             r = client.get(f"https://{host}{WELL_KNOWN}")
         return r.status_code == 200 and token in r.text
     except httpx.HTTPError:

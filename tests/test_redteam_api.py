@@ -95,3 +95,39 @@ def test_isolation_between_installations(ctx):
     with ctx.db.session() as s, s.begin():
         s.add(Installation(id=9, account_login="otra", modules=["ai"], subscription_status="active"))
     assert ctx.get("/api/installations/9/redteam/targets").status_code == 404
+
+
+def test_target_headers_cannot_redirect_or_break_requests(ctx):
+    base = {"url": "https://chat.acme.com/api"}
+    for bad in ({"Host": "victima.example"}, {"Transfer-Encoding": "chunked"}, {"Proxy-Authorization": "x"},
+                {"X-Ok": "a\r\nHost: b"}, {f"X-{i}": "v" for i in range(21)}):
+        r = ctx.post("/api/installations/7/redteam/targets", headers=O, json={**base, "headers": bad})
+        assert r.status_code == 422, bad
+    ok = ctx.post("/api/installations/7/redteam/targets", headers=O, json={**base, "headers": {"Authorization": "Bearer x"}})
+    assert ok.status_code == 201
+
+
+def test_send_probe_drops_forbidden_headers():
+    seen = {}
+
+    def handler(request):
+        seen.update(request.headers)
+        return httpx.Response(200, json={"output": "no"})
+    tgt = redteam.Target(url="https://chat.acme.com/api", headers={"Host": "victima.example", "X-Key": "k"})
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        redteam.send_probe(client, tgt, "hola")
+    assert seen["host"] == "chat.acme.com" and seen["x-key"] == "k"
+
+
+def test_demo_shortcuts_need_demo_login(tmp_path, monkeypatch):
+    # Sin DEMO_LOGIN, la instalación 1 es una más: verificar exige la comprobación real.
+    monkeypatch.setattr("appsec_ai.service.ownership.is_public_host", lambda host, **k: True)
+    monkeypatch.setattr("appsec_ai.service.ownership.verify", lambda *a, **k: "")
+    settings = Settings(database_url=f"sqlite:///{tmp_path / 'db.sqlite'}", session_secret="s" * 64, public_url=PUBLIC)
+    db = Database(settings.database_url)
+    c = TestClient(create_app(settings, db), base_url=PUBLIC)
+    with db.session() as s, s.begin():
+        s.add(Installation(id=1, account_login="uno", modules=["ai"], subscription_status="active"))
+    c.cookies.set(SESSION_COOKIE, encode_session(settings.session_secret, {"id": 1, "login": "ana"}, [1]))
+    tid = c.post("/api/installations/1/redteam/targets", headers=O, json={"url": "https://tercero.example/api"}).json()["id"]
+    assert c.post(f"/api/installations/1/redteam/targets/{tid}/verify", headers=O).status_code == 409
