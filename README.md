@@ -2,7 +2,7 @@
 
 Escáner de seguridad de código y de aplicaciones con IA. Es el núcleo del futuro SaaS: ejecuta motores open source de referencia, añade un **motor propio de seguridad de IA** (OWASP Top 10 para LLM) y usa **Claude** para descartar falsos positivos, explicar cada problema y proponer la corrección.
 
-Requisitos del producto y hoja de ruta: [`REQUISITOS.md`](REQUISITOS.md). Despliegue del SaaS (GitHub App, API y worker): [`docs/DESPLIEGUE.md`](docs/DESPLIEGUE.md).
+Requisitos del producto y hoja de ruta: [`REQUISITOS.md`](REQUISITOS.md). Despliegue del SaaS (GitHub App, API y worker): [`docs/DESPLIEGUE.md`](docs/DESPLIEGUE.md). Lista de pasos para lanzar y comprobar la configuración (`appsec-ai doctor`): [`docs/PUESTA_EN_MARCHA.md`](docs/PUESTA_EN_MARCHA.md).
 
 ## Qué analiza
 
