@@ -682,7 +682,8 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
                 raise HTTPException(status_code=402, detail=f"servicios no contratados: {missing}")
             if demo.is_demo(repo.installation_id) and settings.demo_login:
                 # La organización de ejemplo no está en GitHub: se escanea al momento su código de ejemplo.
-                scan = demo.scan_demo_repo(db, repository_id, services or sorted(plan.services), principal.login)
+                scan = demo.scan_demo_repo(db, repository_id, services or sorted(plan.services), principal.login,
+                                           principal_lang(s.get(Installation, repo.installation_id)))
                 db.audit(repo.installation_id, principal.login, "scan.requested", repo.full_name,
                          {"kind": "manual", "services": scan.services})
                 return _scan_summary(scan)

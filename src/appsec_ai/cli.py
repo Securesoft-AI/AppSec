@@ -85,6 +85,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.files_from:
         only = {line.strip() for line in args.files_from.read_text().splitlines() if line.strip()}
     result = scan(args.path, engines=engines, triager=triager, only_files=only)
+    if only is None:  # RF-2.6: el modelo de amenazas describe el sistema entero, no un diff
+        from appsec_ai import threatmodel
+
+        result.threat_model = threatmodel.build(result, args.lang, triager, args.path)
+        if triager:
+            result.llm_usage = dict(triager.usage)
 
     if args.format == "pdf":
         if not args.output:

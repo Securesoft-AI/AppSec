@@ -11,6 +11,7 @@ from pathlib import Path
 
 from appsec_ai.fixes import FileFix, FixError, files_to_fix
 from appsec_ai.models import Finding, ScanResult
+from appsec_ai import threatmodel
 from appsec_ai.scanner import apply_triage
 from appsec_ai.scanner import scan as run_scan
 from appsec_ai.service import render
@@ -165,6 +166,12 @@ class Worker:
                     triager.cache_dir = Path(self.settings.ai_cache_dir) / str(repo_id)
                     triager.cipher = self.db.cipher
                 apply_triage(src, result, triager)
+            if changed is None and "ai" in categories_for(selected):
+                # RF-2.6: modelo de amenazas de los sistemas de IA del repositorio (solo en escaneos completos).
+                result.threat_model = threatmodel.build(result, lang, triager, src)
+                if triager is not None:
+                    result.llm_usage = dict(triager.usage)
+            if triager is not None:
                 self._record_ai_usage(installation_id, triager.requests)
             result.target = repo_name
         finally:
