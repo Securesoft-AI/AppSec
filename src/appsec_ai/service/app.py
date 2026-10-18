@@ -132,6 +132,10 @@ class NotificationsIn(BaseModel):
     slack_webhook: str = Field(default="", max_length=500)
 
 
+class SsoVerifyIn(BaseModel):
+    domain: str = Field(max_length=253)
+
+
 class SsoStartIn(BaseModel):
     email: str = Field(min_length=3, max_length=320)
 
@@ -323,12 +327,17 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
         domain = email.rsplit("@", 1)[1].lower() if "@" in email else ""
         if not domain:
             return None, {}
+        matches = [(inst_id, cfg) for inst_id, cfg in _sso_configs() if domain in cfg.get("verified", [])]
+        # Solo dominios verificados, y nunca ambiguos: un dominio no puede llevar a dos organizaciones.
+        return matches[0] if len(matches) == 1 else (None, {})
+
+    def _sso_configs():
         with db.session() as s:
-            for inst in s.scalars(select(Installation)).all():
-                cfg = unseal(db.cipher, inst.oidc_config) or {}
-                if cfg and domain in {d.strip().lower() for d in cfg.get("domains", []) if d.strip()}:
-                    return inst.id, cfg
-        return None, {}
+            rows = [(inst.id, inst.oidc_config) for inst in s.scalars(select(Installation)).all() if inst.oidc_config]
+        return [(inst_id, cfg) for inst_id, sealed in rows if (cfg := unseal(db.cipher, sealed) or {})]
+
+    def _sso_token(installation_id: int, domain: str) -> str:
+        return ownership.challenge_token(settings.session_secret, installation_id, "sso:" + domain)
 
     @app.post("/auth/sso/start", include_in_schema=False)
     def sso_start(data: SsoStartIn):
@@ -373,7 +382,7 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
         except oidc.OIDCError:
             log.exception("verificación OIDC falló")
             raise HTTPException(status_code=401, detail="el proveedor no validó el acceso") from None
-        email = oidc.allowed_email(claims, cfg.get("domains", []))
+        email = oidc.allowed_email(claims, cfg.get("verified", []))
         if not email:
             raise HTTPException(status_code=403, detail="tu email no está autorizado para esta organización")
         resp = RedirectResponse("/app", status_code=302)
@@ -1089,8 +1098,13 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
     def get_sso(installation_id: int, principal: Principal = Depends(auth)):
         with db.session() as s:
             cfg = unseal(db.cipher, visible_installation(s, principal, installation_id).oidc_config) or {}
+        return _sso_public(installation_id, cfg)
+
+    def _sso_public(installation_id: int, cfg: dict) -> dict:
+        domains = cfg.get("domains", [])
         return {"configured": bool(cfg), "issuer": cfg.get("issuer", ""), "client_id": cfg.get("client_id", ""),
-                "domains": cfg.get("domains", [])}
+                "domains": domains, "verified": [d for d in domains if d in cfg.get("verified", [])],
+                "dns_records": {d: ownership.DNS_PREFIX + _sso_token(installation_id, d) for d in domains}}
 
     @app.patch("/api/installations/{installation_id}/sso")
     def set_sso(installation_id: int, data: SsoConfigIn, principal: Principal = Depends(auth)):
@@ -1101,14 +1115,42 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
             raise HTTPException(status_code=422, detail="faltan datos de SSO (issuer, client_id, client_secret y dominios)")
         if issuer and not issuer.startswith("https://"):
             raise HTTPException(status_code=422, detail="el issuer debe ser https")
-        cfg = {"issuer": issuer, "client_id": data.client_id.strip(), "client_secret": data.client_secret.strip(),
-               "domains": domains} if all(filled) else {}
         with db.session() as s, s.begin():
             inst = visible_installation(s, principal, installation_id)
+            previous = unseal(db.cipher, inst.oidc_config) or {}
+            # Los dominios ya verificados se conservan mientras sigan en la lista.
+            cfg = {"issuer": issuer, "client_id": data.client_id.strip(), "client_secret": data.client_secret.strip(),
+                   "domains": domains, "verified": [d for d in previous.get("verified", []) if d in domains]} \
+                if all(filled) else {}
             inst.oidc_config = seal(db.cipher, cfg) if cfg else {}
             db.audit(installation_id, principal.login, "sso.changed", issuer,
                      {"configured": bool(cfg), "domains": domains}, session=s)
-            return {"configured": bool(cfg), "issuer": issuer, "client_id": cfg.get("client_id", ""), "domains": domains}
+            return _sso_public(installation_id, cfg)
+
+    @app.post("/api/installations/{installation_id}/sso/verify")
+    def verify_sso_domain(installation_id: int, data: SsoVerifyIn, principal: Principal = Depends(auth)):
+        """Verifica por DNS TXT que el dominio es de la organización antes de usarlo para el login SSO.
+
+        Sin esto, cualquiera podría reclamar el dominio de otra empresa y mandar a sus empleados a su IdP.
+        """
+        domain = data.domain.strip().lower()
+        with db.session() as s:
+            cfg = unseal(db.cipher, visible_installation(s, principal, installation_id).oidc_config) or {}
+        if domain not in cfg.get("domains", []):
+            raise HTTPException(status_code=404, detail="ese dominio no está en la configuración de SSO")
+        if any(domain in other.get("verified", []) for inst_id, other in _sso_configs() if inst_id != installation_id):
+            raise HTTPException(status_code=409, detail="ese dominio ya está verificado por otra organización")
+        record = ownership.DNS_PREFIX + _sso_token(installation_id, domain)
+        if domain not in cfg.get("verified", []) and not ownership.verify_dns(domain, _sso_token(installation_id, domain)):
+            raise HTTPException(status_code=422, detail=f"no encontramos el registro TXT {record} en {domain}")
+        with db.session() as s, s.begin():
+            inst = visible_installation(s, principal, installation_id)
+            cfg = unseal(db.cipher, inst.oidc_config) or {}
+            if domain in cfg.get("domains", []) and domain not in cfg.get("verified", []):
+                cfg["verified"] = sorted({*cfg.get("verified", []), domain})
+                inst.oidc_config = seal(db.cipher, cfg)
+                db.audit(installation_id, principal.login, "sso.domain_verified", domain, session=s)
+            return _sso_public(installation_id, cfg)
 
     # -- planes y facturación (RF-4.5) ------------------------------------------------------------
 

@@ -14,6 +14,8 @@ import json
 import secrets
 
 import httpx
+
+from appsec_ai.egress import safe_transport
 import jwt
 from jwt.algorithms import RSAAlgorithm
 
@@ -23,7 +25,7 @@ class OIDCError(RuntimeError):
 
 
 def _client(transport: httpx.BaseTransport | None) -> httpx.Client:
-    return httpx.Client(transport=transport, timeout=15, trust_env=transport is None, follow_redirects=False)
+    return httpx.Client(transport=transport or safe_transport(), timeout=15, trust_env=False, follow_redirects=False)
 
 
 def discover(issuer: str, transport: httpx.BaseTransport | None = None) -> dict:

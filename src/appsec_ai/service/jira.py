@@ -14,6 +14,8 @@ import logging
 
 import httpx
 
+from appsec_ai.egress import safe_transport
+
 log = logging.getLogger("appsec_ai.jira")
 
 
@@ -29,8 +31,8 @@ class Jira:
         self._transport, self._timeout = transport, timeout
 
     def _client(self) -> httpx.Client:
-        return httpx.Client(base_url=self.base_url, transport=self._transport, timeout=self._timeout,
-                            trust_env=self._transport is None,
+        return httpx.Client(base_url=self.base_url, transport=self._transport or safe_transport(),
+                            timeout=self._timeout, trust_env=False,
                             headers={"Authorization": f"Basic {self._auth}", "Accept": "application/json",
                                      "Content-Type": "application/json"})
 

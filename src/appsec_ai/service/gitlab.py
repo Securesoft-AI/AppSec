@@ -14,6 +14,8 @@ from urllib.parse import quote
 
 import httpx
 
+from appsec_ai.egress import safe_transport
+
 log = logging.getLogger("appsec_ai.gitlab")
 
 
@@ -27,8 +29,8 @@ class Gitlab:
         self._token, self._transport, self._timeout = token, transport, timeout
 
     def _client(self) -> httpx.Client:
-        return httpx.Client(base_url=self.base_url, transport=self._transport, timeout=self._timeout,
-                            trust_env=self._transport is None, headers={"PRIVATE-TOKEN": self._token})
+        return httpx.Client(base_url=self.base_url, transport=self._transport or safe_transport(),
+                            timeout=self._timeout, trust_env=False, headers={"PRIVATE-TOKEN": self._token})
 
     def _project_path(self, project: str) -> str:
         # Admite id numérico o ruta "grupo/proyecto" (hay que codificarla).

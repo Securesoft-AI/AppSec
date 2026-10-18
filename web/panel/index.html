@@ -236,6 +236,9 @@ const I18N = {
     sso_hint: "Deja que tu equipo entre con vuestro proveedor de identidad (Okta, Entra ID, Google…). Los usuarios con un email de los dominios permitidos entran sin GitHub.",
     sso_issuer: "Issuer (https://…)", sso_client: "Client ID", sso_secret: "Client secret", sso_domains: "Dominios permitidos (separados por comas)",
     sso_connected: "SSO conectado ({p}).", sso_none: "SSO no está configurado.", sso_redirect: "URL de redirección (para el proveedor): {u}",
+    sso_pending: "SSO configurado: falta verificar un dominio.", sso_domain_ok: "{d} verificado",
+    sso_domain_todo: "Para usar {d}, añade este registro TXT en su DNS y pulsa Verificar:", sso_verify: "Verificar",
+    sso_verified_ok: "{d} verificado: ya se puede entrar con SSO.", "a.sso.domain_verified": "Dominio SSO verificado",
     "a.bitbucket.changed": "Bitbucket cambiado", "a.bitbucket.issue_created": "Incidencia de Bitbucket creada",
     bb_title: "Bitbucket", bb_hint: "Crea incidencias en Bitbucket Cloud. Necesitas el workspace, el repositorio, tu usuario y un app password. Las incidencias deben estar activadas en el repositorio.",
     bb_workspace: "Workspace", bb_repo: "Repositorio", bb_user: "Usuario", bb_pass: "App password",
@@ -321,6 +324,9 @@ const I18N = {
     sso_hint: "Let your team sign in with your identity provider (Okta, Entra ID, Google…). Users with an email in the allowed domains sign in without GitHub.",
     sso_issuer: "Issuer (https://…)", sso_client: "Client ID", sso_secret: "Client secret", sso_domains: "Allowed domains (comma-separated)",
     sso_connected: "SSO connected ({p}).", sso_none: "SSO not configured.", sso_redirect: "Redirect URL (for the provider): {u}",
+    sso_pending: "SSO configured: a domain still needs verifying.", sso_domain_ok: "{d} verified",
+    sso_domain_todo: "To use {d}, add this TXT record to its DNS and click Verify:", sso_verify: "Verify",
+    sso_verified_ok: "{d} verified: SSO sign-in is now enabled.", "a.sso.domain_verified": "SSO domain verified",
     "a.bitbucket.changed": "Bitbucket changed", "a.bitbucket.issue_created": "Bitbucket issue created",
     bb_title: "Bitbucket", bb_hint: "Create Bitbucket Cloud issues. You need the workspace, the repository, your username and an app password. Issues must be enabled on the repository.",
     bb_workspace: "Workspace", bb_repo: "Repository", bb_user: "Username", bb_pass: "App password",
@@ -1013,10 +1019,21 @@ function viewIntegrations() {
                 client_secret: el("input", { type: "password", maxlength: 500, autocomplete: "off" }),
                 domains: el("input", { maxlength: 400, placeholder: "tuempresa.com, filial.com" }) };
     const pill = el("span", { class: "pill off" });
-    const load = (c) => { const on = !!c.configured; pill.className = "pill " + (on ? "on" : "off");
-      pill.textContent = on ? t("sso_connected", { p: (c.domains || []).join(", ") }) : t("sso_none");
+    const domainList = el("div", {});
+    const verify = async (d) => { try {
+        load(await api(base("/sso/verify"), { method: "POST", body: JSON.stringify({ domain: d }) }));
+        show(msg, t("sso_verified_ok", { d })); }
+      catch (e) { show(msg, t("error") + e.message, false); } };
+    const load = (c) => { const on = !!c.configured, ok = c.verified || [];
+      pill.className = "pill " + (on && ok.length ? "on" : "off");
+      pill.textContent = !on ? t("sso_none") : ok.length ? t("sso_connected", { p: ok.join(", ") }) : t("sso_pending");
       f.issuer.value = c.issuer || ""; f.client_id.value = c.client_id || ""; f.client_secret.value = "";
-      f.domains.value = (c.domains || []).join(", "); };
+      f.domains.value = (c.domains || []).join(", ");
+      domainList.replaceChildren(...(c.domains || []).map((d) => ok.includes(d)
+        ? el("p", {}, el("span", { class: "pill on" }, t("sso_domain_ok", { d })))
+        : el("div", { class: "row" }, el("p", { class: "muted" }, t("sso_domain_todo", { d })),
+            el("code", { class: "mono" }, (c.dns_records || {})[d] || ""),
+            el("button", { class: "btn", type: "button", onclick: () => verify(d) }, t("sso_verify"))))); };
     api(base("/sso")).then(load).catch(() => load({}));
     const save = async (clear) => { try {
         const body = clear ? { issuer: "", client_id: "", client_secret: "", domains: [] }
@@ -1028,7 +1045,7 @@ function viewIntegrations() {
       [msg, el("p", { class: "muted mono" }, t("sso_redirect", { u: location.origin + "/auth/sso/callback" })),
        el("div", { class: "form" }, el("label", { class: "full" }, t("sso_issuer"), f.issuer),
          el("label", {}, t("sso_client"), f.client_id), el("label", {}, t("sso_secret"), f.client_secret),
-         el("label", { class: "full" }, t("sso_domains"), f.domains))],
+         el("label", { class: "full" }, t("sso_domains"), f.domains)), domainList],
       [el("button", { class: "btn primary", type: "button", onclick: () => save(false) }, t("notif_save")),
        el("button", { class: "btn", type: "button", onclick: () => save(true) }, t("notif_clear"))]);
   }
