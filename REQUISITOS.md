@@ -101,7 +101,7 @@ Leyenda: ✅ hecho · 🔜 MVP · ⏭ posterior
 - ✅ RF‑4.5 Facturación con Stripe (Checkout, Portal de cliente y webhooks firmados) y planes Free/Starter/Team/Business aplicados en el servidor: repositorios, escaneo en PR, escaneo semanal en Free, triage con IA con presupuesto mensual, botón de fixes, PDF y mapeo de cumplimiento. Prueba de Team de 14 días al instalar la App.
 - ✅ RF‑4.6 Inglés y español en panel, landing, informes (Markdown y PDF), checks, comentarios y PR de correcciones de GitHub, y en el triage. Cada organización elige el idioma de GitHub; cada usuario, el del panel. Los correos se traducirán cuando existan (hoy el servicio no envía ninguno).
 - ✅ RF‑4.7 Informe PDF descargable en español o inglés (panel, `GET /api/scans/{id}/report.pdf` y `appsec-ai scan --format pdf`), con metodología, mapeo a marcos de IA, inventario y detalle de hallazgos.
-- 🟡 RF‑4.8 Integraciones y cumplimiento. Hecho: **registros de auditoría** (tabla append-only con las acciones sensibles —inicios de sesión, escaneos, pentests, red team, facturación y ajustes— por organización, visibles en el panel). Pendiente: GitLab y Bitbucket, Slack, Jira, SSO (SAML/OIDC).
+- 🟡 RF‑4.8 Integraciones y cumplimiento. Hecho: **registros de auditoría** (tabla append-only con las acciones sensibles —inicios de sesión, escaneos, pentests, red team, facturación y ajustes— por organización, visibles en el panel) y **avisos en Slack** (webhook entrante por organización: escaneos de la rama principal con hallazgos graves, cambios de estado de pentests y hallazgos de red team). Pendiente: GitLab y Bitbucket, Jira, SSO (SAML/OIDC).
 
 ## 5. Requisitos no funcionales
 
@@ -166,7 +166,7 @@ Precios iguales en € y $ para simplificar. Hay que validarlos con los design p
 | ✅ 1 | 41 reglas SAST propias; motor de IA con tree-sitter y 15 reglas; validación con código real |
 | ✅ 2 | Backend del SaaS: GitHub App, webhooks, cola, worker, checks y comentarios en PR, Docker |
 | ✅ 3 | Servicios por separado (SAST, SCA, Secretos, IaC, IA, Pentest) con paquetes; panel unificado con vista por servicio, escaneo bajo demanda y solicitud de pentests; login de demo user/pass |
-| ✅ 4 | Migraciones de base de datos (Alembic); vista Equipo para gestionar pentests (presupuesto, aceptación, estado, informe) e informe de pentest en PDF; red teaming dinámico de endpoints con IA (RF‑2.7); registros de auditoría; contenedor efímero por escaneo (RF‑4.4, `SCAN_RUNNER`) |
+| ✅ 4 | Migraciones de base de datos (Alembic); vista Equipo para gestionar pentests (presupuesto, aceptación, estado, informe) e informe de pentest en PDF; red teaming dinámico de endpoints con IA (RF‑2.7); registros de auditoría; contenedor efímero por escaneo (RF‑4.4, `SCAN_RUNNER`); avisos en Slack |
 | ✅ 2 | Landing bilingüe (nombre provisional "Atalaya") con lista de espera guardada en el backend y cabeceras de seguridad |
 | 2 | Probar el triage con la API real; conjunto de evaluación; crear la GitHub App y desplegar |
 | 1–2 | Landing bilingüe con lista de espera y precios; reclutar 5–10 design partners entre tus contactos |

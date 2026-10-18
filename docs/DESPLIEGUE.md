@@ -156,6 +156,11 @@ ejecuciones desde la misma cola que los escaneos. La verificación DNS usa `dnsp
   pentests y red team, facturación y ajustes) se guarda en la tabla `audit_log`, que es de solo añadir: la
   aplicación no tiene ningún endpoint para modificar ni borrar entradas. Cada organización ve su propia
   actividad en el panel (`GET /api/installations/{id}/audit`). El detalle no guarda secretos ni código.
+- **Avisos en Slack** (RF-4.8): cada organización conecta un *incoming webhook* de Slack desde el panel
+  (Servicios y plan → «Avisos en Slack»). El servicio avisa cuando un escaneo de la rama principal termina
+  con hallazgos críticos o altos, cuando un pentest pasa a «programado» o «informe entregado» y cuando un
+  red team encuentra algo. El webhook es un secreto y se guarda cifrado; un fallo al avisar se registra y no
+  interrumpe el escaneo. El botón «Enviar prueba» publica un mensaje de comprobación.
 - **Cifrado en reposo** con `DATA_ENCRYPTION_KEY` (Fernet): resultados de escaneos y detalle de las correcciones
   en la base de datos, y la caché del triage en disco. Para rotar la clave: `DATA_ENCRYPTION_KEY=nueva,antigua`
   (cifra con la primera y descifra con todas). Las filas anteriores sin cifrar se siguen leyendo. Sin clave, el

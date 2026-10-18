@@ -41,6 +41,8 @@ class Installation(Base):
     stripe_subscription_id: Mapped[str] = mapped_column(String(100), default="")
     # Servicios y paquetes contratados (claves de appsec_ai.services), según la suscripción de Stripe.
     modules: Mapped[list] = mapped_column(JSON, default=list)
+    # Webhook entrante de Slack para avisos (cifrado si hay clave; vacío = sin avisos).
+    slack_webhook: Mapped[dict] = mapped_column(JSON, default=dict)
     subscription_status: Mapped[str] = mapped_column(String(30), default="")
     usage_period: Mapped[str] = mapped_column(String(7), default="")  # AAAA-MM
     ai_requests_used: Mapped[int] = mapped_column(Integer, default=0)
