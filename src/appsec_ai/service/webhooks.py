@@ -193,7 +193,10 @@ class PlanLimit(Exception):
 
 def request_fix(s: Session, scan: Scan, requested_by: str = "") -> FixRequest:
     """Encola la corrección de un escaneo. Idempotente; una petición fallida se puede repetir."""
-    inst = s.get(Installation, s.get(Repository, scan.repository_id).installation_id)
+    repo = s.get(Repository, scan.repository_id)
+    if repo.provider != "github":
+        raise PlanLimit("los PRs con correcciones solo están disponibles en GitHub")
+    inst = s.get(Installation, repo.installation_id)
     plan = plans.effective_plan(inst)
     if not plan.fix_pr:
         raise PlanLimit(f"el plan {plan.name} no incluye PRs con correcciones")
@@ -214,3 +217,41 @@ HANDLERS = {
     "push": on_push,
     "check_run": on_check_run,
 }
+
+
+# -- GitLab --------------------------------------------------------------------------------------
+
+GITLAB_MR_ACTIONS = {"open", "reopen", "update"}
+
+
+def handle_gitlab_event(s: Session, installation_id: int, event: str, p: dict) -> dict:
+    """Push a la rama por defecto -> escaneo completo; MR abierta o actualizada -> escaneo incremental.
+
+    Solo para proyectos que la organización ha añadido en el panel: un webhook de un proyecto desconocido se ignora.
+    """
+    from appsec_ai.service.gitlab_scm import repo_id
+
+    project = p.get("project") or {}
+    try:
+        repo = s.get(Repository, repo_id(installation_id, int(project.get("id") or p.get("project_id") or 0)))
+    except (TypeError, ValueError):
+        return {"ignored": "proyecto no válido"}
+    if repo is None or repo.provider != "gitlab" or repo.installation_id != installation_id:
+        return {"ignored": "proyecto no añadido"}
+    if event == "Push Hook":
+        after = str(p.get("after") or "")
+        if p.get("ref") != f"refs/heads/{repo.default_branch}" or not after.strip("0"):
+            return {"ignored": "rama distinta de la rama por defecto"}
+        return _enqueued(s, repo, enqueue(s, repo, ScanKind.FULL, after, p["ref"]), ScanKind.FULL)
+    if event == "Merge Request Hook":
+        mr = p.get("object_attributes") or {}
+        if mr.get("action") not in GITLAB_MR_ACTIONS or mr.get("draft") or mr.get("work_in_progress"):
+            return {"ignored": f"merge_request.{mr.get('action')}"}
+        if mr.get("action") == "update" and not mr.get("oldrev"):
+            return {"ignored": "MR actualizada sin commits nuevos"}
+        sha = str((mr.get("last_commit") or {}).get("id") or "")
+        if not sha or not mr.get("iid"):
+            return {"ignored": "MR sin commit"}
+        scan = enqueue(s, repo, ScanKind.PULL_REQUEST, sha, f"refs/heads/{mr.get('source_branch', '')}", int(mr["iid"]))
+        return _enqueued(s, repo, scan, ScanKind.PULL_REQUEST)
+    return {"ignored": event}

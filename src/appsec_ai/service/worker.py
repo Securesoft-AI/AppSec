@@ -49,13 +49,14 @@ def filter_to_files(result: ScanResult, files: set[str]) -> ScanResult:
 
 class Worker:
     def __init__(self, settings: Settings, db: Database, github: GitHubApp, scanner=None, triager_factory=None,
-                 notifier=None):
+                 notifier=None, gitlab_factory=None):
         self.settings = settings
         self.db = db
         self.github = github
         self.scanner = scanner or self._default_scanner
         self.triager_factory = triager_factory or self._default_triager
         self.notifier = notifier if notifier is not None else notify.Slack()
+        self.gitlab_factory = gitlab_factory or self._gitlab_scm
 
     def _default_scanner(self, src: Path, only_files: set[str] | None = None,
                          engines: list[str] | None = None) -> ScanResult:
@@ -117,6 +118,7 @@ class Worker:
             scan = s.get(Scan, scan_id)
             repo = s.get(Repository, scan.repository_id)
             repo_id, repo_name, installation_id = repo.id, repo.full_name, repo.installation_id
+            provider = repo.provider
             kind, sha, pr_number, check_id = scan.kind, scan.head_sha, scan.pr_number, scan.check_run_id
             lang = self._language(s, installation_id)
             inst = s.get(Installation, installation_id)
@@ -125,10 +127,11 @@ class Worker:
             # Servicios de este escaneo: los pedidos (o los elegidos para el repositorio) que estén contratados.
             selected = plans.scan_services(plan, scan.services or repo.services)
 
-        gh = self.github.installation(installation_id)
+        gh = self._host(installation_id, repo_id, provider, sha)
         if not check_id:  # en un reintento se reutiliza el check ya creado
             check_id = gh.create_check_run(repo_name, sha, render.CHECK_NAME)
-            self._update(scan_id, check_run_id=check_id)
+            if check_id:
+                self._update(scan_id, check_run_id=check_id)
 
         workdir = Path(tempfile.mkdtemp(prefix="appsec-ai-", dir=self.settings.workdir or None))
         try:
@@ -180,8 +183,9 @@ class Worker:
         findings = render.visible(result)
         title, summary, text = render.check_output(result, full_scan=changed is None, lang=lang)
         conclusion = render.conclusion(findings, self.settings.fail_on)
+        fix_button = ai_enabled and plan.fix_pr and provider == "github"   # el PR con fixes solo existe en GitHub
         gh.complete_check_run(repo_name, check_id, conclusion, title, summary, text, render.annotations(findings, lang),
-                              actions=render.fix_actions(result, lang) if ai_enabled and plan.fix_pr else None)
+                              actions=render.fix_actions(result, lang) if fix_button else None)
         if pr_number:
             gh.upsert_comment(repo_name, pr_number, render.pr_comment(result, lang=lang), render.COMMENT_MARKER)
 
@@ -197,6 +201,24 @@ class Worker:
             self._notify_slack(installation_id, lang, *notify.scan_message(
                 repo_name, kind, counts, len(findings), lang, self._panel_url(installation_id)))
             self._auto_export(installation_id, [f.model_dump(mode="json") for f in findings], repo_name, lang)
+
+    def _host(self, installation_id: int, repo_id: int, provider: str, sha: str):
+        """Cliente de la plataforma del repositorio: GitHub (checks y PRs) o GitLab (estados y MRs)."""
+        if provider != "gitlab":
+            return self.github.installation(installation_id)
+        from appsec_ai.service.gitlab_scm import GitlabHost, project_id
+
+        return GitlabHost(self.gitlab_factory(installation_id), project_id(repo_id), sha, self._panel_url(installation_id))
+
+    def _gitlab_scm(self, installation_id: int):
+        from appsec_ai.service.gitlab_scm import GitlabSCM, GitlabSCMError
+
+        with self.db.session() as s:
+            inst = s.get(Installation, installation_id)
+            cfg = unseal(self.db.cipher, inst.gitlab_scm) if inst else {}
+        if not cfg:
+            raise GitlabSCMError("GitLab no está conectado en esta organización")
+        return GitlabSCM(cfg["base_url"], cfg["token"])
 
     def _auto_export(self, installation_id: int, findings: list[dict], repo_name: str, lang: str):
         with self.db.session() as s:
@@ -225,6 +247,7 @@ class Worker:
             scan = s.get(Scan, fix.scan_id)
             repo = s.get(Repository, scan.repository_id)
             repo_name, installation_id, attempt = repo.full_name, repo.installation_id, fix.attempts
+            repo_provider = repo.provider
             lang = self._language(s, installation_id)
             inst = s.get(Installation, installation_id)
             plan = plans.effective_plan(inst)
@@ -237,6 +260,8 @@ class Worker:
 
         if not plan.fix_pr:
             return self._finish_fix(fix_id, f"El plan {plan.name} no incluye PRs con correcciones.")
+        if repo_provider != "github":
+            return self._finish_fix(fix_id, "Los PRs con correcciones solo están disponibles en GitHub.")
         targets = files_to_fix(render.visible(result)) if result else {}
         if not targets:
             return self._finish_fix(fix_id, "No hay problemas confirmados por la IA que corregir.")
@@ -383,10 +408,11 @@ class Worker:
             scan.finished_at = None if retry else utcnow()
             repo = s.get(Repository, scan.repository_id)
             repo_name, installation_id, check_id = repo.full_name, repo.installation_id, scan.check_run_id
+            provider, repo_id, sha = repo.provider, repo.id, scan.head_sha
             lang = self._language(s, installation_id)
-        if not retry and check_id:
+        if not retry and (check_id or provider == "gitlab"):
             try:
-                self.github.installation(installation_id).complete_check_run(
+                self._host(installation_id, repo_id, provider, sha).complete_check_run(
                     repo_name, check_id, "neutral", ui(lang, "error_title"), ui(lang, "error_summary"))
             except Exception:  # noqa: BLE001
                 log.exception("no se pudo cerrar el check %s", check_id)

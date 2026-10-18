@@ -115,6 +115,9 @@ tr.link { cursor: pointer; } tr.link:hover td { background: var(--accent-soft); 
 .notice { padding: 10px 12px; border-radius: 8px; background: var(--warn-soft); color: var(--ink); margin: 0 0 12px; }
 .notice.ok { background: var(--ok-soft); }
 fieldset.plain { border: 0; margin: 0; padding: 0; min-width: 0; }
+.stack { display: grid; gap: 20px; } .card h3.sub { margin: 16px 0 8px; }
+.card .row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 12px; padding: 6px 0; border-bottom: 1px solid var(--line); }
+.card .row > p { margin: 0; }
 .flows { margin: 4px 0 12px; padding-left: 18px; } .flows li.untrusted { color: var(--warn); }
 details.threat { border-top: 1px solid var(--line); padding: 8px 0; } details.threat summary { cursor: pointer; }
 details.threat h4 { margin: 8px 0 4px; font-size: 13px; }
@@ -245,6 +248,13 @@ const I18N = {
     sso_issuer: "Issuer (https://…)", sso_client: "Client ID", sso_secret: "Client secret", sso_domains: "Dominios permitidos (separados por comas)",
     sso_connected: "SSO conectado ({p}).", sso_none: "SSO no está configurado.", sso_redirect: "URL de redirección (para el proveedor): {u}",
     sso_pending: "SSO configurado: falta verificar un dominio.",
+    gls_title: "GitLab: escanear repositorios", gls_hint: "Conecta tu GitLab (gitlab.com o propio) con un token de acceso con permiso api y elige los proyectos. Se escanean en cada push a la rama principal y en cada merge request, con un comentario en la MR y el estado del commit.",
+    gls_token: "Token de acceso (permiso api)", gls_connected: "Conectado a {u} · {n} proyectos", gls_none: "GitLab no está conectado.",
+    gls_search: "Buscar proyecto", gls_list: "Ver proyectos", gls_projects: "Añadir proyectos", gls_linked: "Proyectos que se escanean",
+    gls_add: "Añadir", gls_none_linked: "Todavía no has añadido ningún proyecto.", gls_added: "Añadido", gls_remove: "Quitar", gls_removed: "Proyecto quitado.", gls_no_projects: "No hay proyectos con ese nombre a los que el token tenga acceso.",
+    gls_added_ok: "{p} añadido; el webhook se ha creado solo.", gls_added_manual: "{p} añadido. El token no puede crear webhooks: configúralo a mano con la URL y el secreto de abajo.",
+    gls_manual: "Webhook manual", gls_manual_hint: "En GitLab: Settings → Webhooks, con eventos Push y Merge request. URL y secreto:",
+    "a.gitlab_scm.changed": "Conexión con GitLab cambiada", "a.gitlab_scm.project_added": "Proyecto de GitLab añadido", "a.gitlab_scm.project_removed": "Proyecto de GitLab quitado",
     int_readonly: "Solo los administradores de la organización en GitHub pueden cambiar las integraciones y el SSO. Pídeselo a uno de ellos.", sso_domain_ok: "{d} verificado",
     sso_domain_todo: "Para usar {d}, añade este registro TXT en su DNS y pulsa Verificar:", sso_verify: "Verificar",
     sso_verified_ok: "{d} verificado: ya se puede entrar con SSO.", "a.sso.domain_verified": "Dominio SSO verificado",
@@ -338,6 +348,13 @@ const I18N = {
     sso_issuer: "Issuer (https://…)", sso_client: "Client ID", sso_secret: "Client secret", sso_domains: "Allowed domains (comma-separated)",
     sso_connected: "SSO connected ({p}).", sso_none: "SSO not configured.", sso_redirect: "Redirect URL (for the provider): {u}",
     sso_pending: "SSO configured: a domain still needs verifying.",
+    gls_title: "GitLab: scan repositories", gls_hint: "Connect your GitLab (gitlab.com or self-hosted) with an access token with api scope and pick the projects. They are scanned on every push to the main branch and every merge request, with a comment on the MR and the commit status.",
+    gls_token: "Access token (api scope)", gls_connected: "Connected to {u} · {n} projects", gls_none: "GitLab not connected.",
+    gls_search: "Search project", gls_list: "List projects", gls_projects: "Add projects", gls_linked: "Projects being scanned",
+    gls_add: "Add", gls_none_linked: "No projects added yet.", gls_added: "Added", gls_remove: "Remove", gls_removed: "Project removed.", gls_no_projects: "No projects with that name that the token can access.",
+    gls_added_ok: "{p} added; the webhook was created automatically.", gls_added_manual: "{p} added. The token cannot create webhooks: set it up manually with the URL and secret below.",
+    gls_manual: "Manual webhook", gls_manual_hint: "In GitLab: Settings → Webhooks, with Push and Merge request events. URL and secret:",
+    "a.gitlab_scm.changed": "GitLab connection changed", "a.gitlab_scm.project_added": "GitLab project added", "a.gitlab_scm.project_removed": "GitLab project removed",
     int_readonly: "Only organization admins on GitHub can change integrations and SSO. Ask one of them.", sso_domain_ok: "{d} verified",
     sso_domain_todo: "To use {d}, add this TXT record to its DNS and click Verify:", sso_verify: "Verify",
     sso_verified_ok: "{d} verified: SSO sign-in is now enabled.", "a.sso.domain_verified": "SSO domain verified",
@@ -522,7 +539,7 @@ function reposCard() {
   const rows = d.all_repositories.map((repo) => {
     const r = scanned.get(repo.id);
     return el("tr", { class: "link", tabindex: "0", onclick: () => go("repo", repo.id), onkeydown: (e) => { if (e.key === "Enter") go("repo", repo.id); } },
-      el("td", { class: "mono" }, repo.full_name),
+      el("td", { class: "mono" }, repo.full_name, repo.provider === "gitlab" ? el("span", { class: "pill off" }, " GitLab") : ""),
       ...SCAN_SERVICES.map((k) => el("td", { class: "num" }, r ? (r.by_category[k] || 0) : t("none"))),
       el("td", { class: "num" }, r ? r.total : t("none")),
       el("td", { class: "muted" }, r && r.finished_at ? new Date(r.finished_at).toLocaleDateString(lang) + " · " + t(r.kind) : t("none")));
@@ -602,7 +619,7 @@ async function viewRepo(repoId) {
     el("section", { class: "card" },
       el("div", { class: "toolbar" }, el("h2", { class: "mono" }, repo.full_name),
         row && state.billing.limits.pdf_report ? el("a", { class: "btn", href: `/api/scans/${row.scan_id}/report.pdf?lang=${lang}` }, t("pdf")) : "",
-        row && state.billing.limits.fix_pr ? el("button", { class: "btn", type: "button", onclick: async () => {
+        row && state.billing.limits.fix_pr && repo.provider !== "gitlab" ? el("button", { class: "btn", type: "button", onclick: async () => {
           try { await api(`/api/scans/${row.scan_id}/fix-pr`, { method: "POST" }); say(t("fix_requested")); } catch (e) { say(t("error") + e.message, false); }
         } }, t("fix_pr")) : "",
         el("button", { class: "btn", type: "button", onclick: () => go("overview") }, t("back"))),
@@ -1045,13 +1062,63 @@ function viewIntegrations() {
        el("button", { class: "btn", type: "button", onclick: () => save(true) }, t("notif_clear"))]);
   }
 
+  // GitLab como plataforma de código: conectar con un token y elegir qué proyectos escanear.
+  function gitlabScmCard() {
+    const msg = notice();
+    const f = { base_url: el("input", { type: "url", maxlength: 300, placeholder: "https://gitlab.com" }),
+                token: el("input", { type: "password", maxlength: 500, autocomplete: "off" }) };
+    const pill = el("span", { class: "pill off" });
+    const search = el("input", { maxlength: 100, placeholder: t("gls_search") });
+    const projects = el("div", {}), linked = el("div", {}), hookInfo = el("div", {});
+    // Los proyectos solo tienen sentido con GitLab conectado.
+    const connected = el("div", { hidden: true }, el("h3", { class: "sub" }, t("gls_linked")), linked, hookInfo,
+      el("h3", { class: "sub" }, t("gls_projects")), el("div", { class: "toolbar" }, search,
+        el("button", { class: "btn", type: "button", onclick: () => list() }, t("gls_list"))), projects);
+    let cfg = {};
+    const load = (c) => { cfg = c; const on = !!c.configured; connected.hidden = !on;
+      pill.className = "pill " + (on ? "on" : "off");
+      pill.textContent = on ? t("gls_connected", { u: c.base_url, n: (c.repositories || []).length }) : t("gls_none");
+      f.base_url.value = c.base_url || "https://gitlab.com"; f.token.value = "";
+      linked.replaceChildren(...(c.repositories || []).length ? [] : [el("p", { class: "muted" }, t("gls_none_linked"))], ...(c.repositories || []).map((r) => el("div", { class: "row" },
+        el("span", { class: "mono" }, r.path),
+        el("button", { class: "btn", type: "button", onclick: async () => {
+          try { await api(base(`/gitlab-scm/projects/${r.id}`), { method: "DELETE" }); await reload(); show(msg, t("gls_removed")); }
+          catch (e) { show(msg, t("error") + e.message, false); } } }, t("gls_remove")))));
+      hookInfo.replaceChildren(...(on && c.webhook_secret ? [el("details", {}, el("summary", { class: "muted" }, t("gls_manual")),
+        el("p", { class: "muted" }, t("gls_manual_hint")), el("p", { class: "mono" }, c.webhook_url),
+        el("p", { class: "mono" }, c.webhook_secret))] : [])); };
+    const reload = async () => load(await api(base("/gitlab-scm")));
+    reload().catch(() => load({}));
+    const list = async () => { try {
+        const rows = await api(base("/gitlab-scm/projects?search=" + encodeURIComponent(search.value)));
+        projects.replaceChildren(...(rows.length ? rows.map((p) => el("div", { class: "row" },
+          el("span", { class: "mono" }, p.path), p.linked ? el("span", { class: "pill on" }, t("gls_added")) :
+          el("button", { class: "btn", type: "button", onclick: async () => {
+            try { const r = await api(base("/gitlab-scm/projects"), { method: "POST", body: JSON.stringify({ project_id: p.id }) });
+              show(msg, t(r.webhook === "manual" ? "gls_added_manual" : "gls_added_ok", { p: r.path })); await reload(); await list(); }
+            catch (e) { show(msg, t("error") + e.message, false); } } }, t("gls_add"))))
+          : [el("p", { class: "muted" }, t("gls_no_projects"))])); }
+      catch (e) { show(msg, t("error") + e.message, false); } };
+    const save = async (clear) => { try {
+        load(await api(base("/gitlab-scm"), { method: "PATCH",
+          body: JSON.stringify(clear ? { token: "" } : { base_url: f.base_url.value, token: f.token.value }) }));
+        show(msg, t("notif_saved")); if (!clear) await list(); else projects.replaceChildren(); }
+      catch (e) { show(msg, t("error") + e.message, false); } };
+    return card(t("gls_title"), t("gls_hint"), pill,
+      [msg, el("div", { class: "form" }, el("label", { class: "full" }, t("gl_url"), f.base_url),
+         el("label", { class: "full" }, t("gls_token"), f.token)),
+       connected],
+      [el("button", { class: "btn primary", type: "button", onclick: () => save(false) }, t("notif_save")),
+       el("button", { class: "btn", type: "button", onclick: () => save(true) }, t("notif_clear"))]);
+  }
+
   // Solo quien administra la organización en GitHub cambia estos ajustes; el resto los ve sin poder editarlos.
   const inst = state.me.installations.find((x) => String(x.id) === instId()) || {};
-  const cards = [slackCard(), destCard("jira"), destCard("gitlab"), bitbucketCard(), ssoCard()];
+  const cards = [gitlabScmCard(), slackCard(), destCard("jira"), destCard("gitlab"), bitbucketCard(), ssoCard()];
   $("main").replaceChildren(
     el("section", { class: "card" }, el("h2", {}, t("int_title")), el("p", { class: "muted" }, t("int_intro")),
       ...(inst.manage ? [] : [el("p", { class: "notice" }, t("int_readonly"))])),
-    inst.manage ? el("div", {}, ...cards) : el("fieldset", { class: "plain", disabled: true }, ...cards));
+    inst.manage ? el("div", { class: "stack" }, ...cards) : el("fieldset", { class: "plain stack", disabled: true }, ...cards));
 
   function ssoCard() {
     const msg = notice();

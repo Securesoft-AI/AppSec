@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import re
+import secrets
 import time
 from collections import Counter, defaultdict, deque
 from pathlib import Path
@@ -33,6 +34,9 @@ from appsec_ai.service import notify, ownership
 from appsec_ai.service import integrations
 from appsec_ai.service.jira import Jira
 from appsec_ai.service.gitlab import Gitlab
+from appsec_ai.service.gitlab_scm import GitlabSCM, GitlabSCMError
+from appsec_ai.service.gitlab_scm import project_id as gitlab_project_id
+from appsec_ai.service.gitlab_scm import repo_id as gitlab_repo_id
 from appsec_ai.service.bitbucket import Bitbucket
 from appsec_ai.service import oidc
 from appsec_ai import redteam
@@ -40,7 +44,7 @@ from appsec_ai.service.github import GitHubApp, GitHubError
 from appsec_ai.service import demo, plans
 from appsec_ai.services import PURCHASABLE, SCAN_SERVICES, catalog
 from appsec_ai.service.billing import BillingError, Stripe, apply_event, verify_event
-from appsec_ai.service.webhooks import PlanLimit, enqueue, handle_event, plan_block, request_fix, verify_signature
+from appsec_ai.service.webhooks import PlanLimit, enqueue, handle_event, handle_gitlab_event, plan_block, request_fix, verify_signature
 
 log = logging.getLogger("appsec_ai.api")
 MAX_WEBHOOK_BYTES = 25 * 1024 * 1024  # límite de GitHub para webhooks
@@ -183,6 +187,15 @@ class BitbucketConfigIn(BaseModel):
     auto: bool = False
 
 
+class GitlabScmIn(BaseModel):
+    base_url: str = Field(default="https://gitlab.com", max_length=300)
+    token: str = Field(default="", max_length=500)
+
+
+class GitlabProjectIn(BaseModel):
+    project_id: int = Field(gt=0, lt=10**10)
+
+
 class IssueIn(BaseModel):
     fingerprint: str = Field(min_length=4, max_length=64, pattern=r"^[0-9a-f]+$")
 
@@ -229,7 +242,7 @@ def landing_html() -> str | None:
 
 
 def create_app(settings: Settings | None = None, db: Database | None = None, github: GitHubApp | None = None,
-               stripe: Stripe | None = None) -> FastAPI:
+               stripe: Stripe | None = None, gitlab_scm=None) -> FastAPI:
     settings = settings or get_settings()
     db = db or Database(settings.database_url, Cipher.from_keys(settings.data_encryption_key))
     if db.cipher is None:
@@ -597,7 +610,8 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
             data["trend"] = dashboard.trend(list(recent), utcnow().date())
             data["repositories_without_scans"] = sorted(repos[r] for r in set(repos) - set(latest_scans))
             # Todos los repositorios, con los servicios elegidos en cada uno (para el panel).
-            data["all_repositories"] = [{"id": r.id, "full_name": r.full_name, "services": r.services}
+            data["all_repositories"] = [{"id": r.id, "full_name": r.full_name, "services": r.services,
+                                        "provider": r.provider}
                                         for r in s.scalars(select(Repository).where(
                                             Repository.installation_id == installation_id, Repository.active)
                                             .order_by(Repository.full_name))]
@@ -691,11 +705,16 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
             if reason:
                 raise HTTPException(status_code=402, detail=reason)
             full_name, branch, installation_id = repo.full_name, repo.default_branch, repo.installation_id
+            provider = repo.provider
+            scm_cfg = unseal(db.cipher, inst.gitlab_scm) if provider == "gitlab" else {}
         try:
-            sha = github.installation(installation_id).branch_head(full_name, branch)
-        except GitHubError:
+            if provider == "gitlab":
+                sha = _scm(scm_cfg).branch_head(gitlab_project_id(repository_id), branch)
+            else:
+                sha = github.installation(installation_id).branch_head(full_name, branch)
+        except (GitHubError, GitlabSCMError):
             log.exception("no se pudo leer la rama %s de %s", branch, full_name)
-            raise HTTPException(status_code=502, detail="GitHub no ha devuelto la rama") from None
+            raise HTTPException(status_code=502, detail="no se ha podido leer la rama del repositorio") from None
         with db.session() as s, s.begin():
             repo = s.get(Repository, repository_id)
             scan = enqueue(s, repo, ScanKind.MANUAL, sha, f"refs/heads/{branch}")
@@ -1132,6 +1151,131 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
     @app.post("/api/scans/{scan_id}/bitbucket")
     def create_bitbucket_issue(scan_id: int, data: IssueIn, principal: Principal = Depends(auth)):
         return _create_issue("bitbucket", scan_id, data.fingerprint, principal)
+
+    # -- GitLab como plataforma de código -----------------------------------------------------------
+
+    scm_factory = gitlab_scm or (lambda base_url, token: GitlabSCM(base_url, token))
+
+    def _scm_cfg(installation_id: int, principal: Principal) -> dict:
+        with db.session() as s:
+            return unseal(db.cipher, visible_installation(s, principal, installation_id).gitlab_scm) or {}
+
+    def _scm(cfg: dict):
+        if not cfg:
+            raise HTTPException(status_code=409, detail="conecta primero GitLab")
+        return scm_factory(cfg["base_url"], cfg["token"])
+
+    def _gitlab_hook_url(installation_id: int) -> str:
+        return f"{settings.public_url}/webhooks/gitlab/{installation_id}"
+
+    @app.get("/api/installations/{installation_id}/gitlab-scm")
+    def get_gitlab_scm(installation_id: int, principal: Principal = Depends(auth)):
+        cfg = _scm_cfg(installation_id, principal)
+        with db.session() as s:
+            linked = s.scalars(select(Repository).where(Repository.installation_id == installation_id,
+                                                        Repository.provider == "gitlab", Repository.active)).all()
+            repos = [{"id": r.id, "path": r.full_name} for r in linked]
+        out = {"configured": bool(cfg), "base_url": cfg.get("base_url", ""), "repositories": repos,
+               "webhook_url": _gitlab_hook_url(installation_id) if cfg else ""}
+        if cfg and principal.can_manage(installation_id):
+            # Para configurar el webhook a mano si el token no es Maintainer. Solo lo ven los administradores.
+            out["webhook_secret"] = cfg.get("webhook_secret", "")
+        return out
+
+    @app.patch("/api/installations/{installation_id}/gitlab-scm")
+    def set_gitlab_scm(installation_id: int, data: GitlabScmIn, principal: Principal = Depends(auth)):
+        require_manager(principal, installation_id)
+        base = (data.base_url.strip().rstrip("/") or "https://gitlab.com")
+        token = data.token.strip()
+        if token and not base.startswith("https://"):
+            raise HTTPException(status_code=422, detail="la URL de GitLab debe ser https")
+        cfg = {}
+        if token:
+            try:
+                user = scm_factory(base, token).check()
+            except GitlabSCMError as e:
+                raise HTTPException(status_code=422, detail=f"GitLab no aceptó el token: {e}") from None
+            cfg = {"base_url": base, "token": token, "user": user, "webhook_secret": secrets.token_urlsafe(32)}
+        with db.session() as s, s.begin():
+            inst = visible_installation(s, principal, installation_id)
+            inst.gitlab_scm = seal(db.cipher, cfg) if cfg else {}
+            if not cfg:  # desconectar deja de escanear sus proyectos
+                for r in s.scalars(select(Repository).where(Repository.installation_id == installation_id,
+                                                            Repository.provider == "gitlab")).all():
+                    r.active = False
+            db.audit(installation_id, principal.login, "gitlab_scm.changed", base if cfg else "",
+                     {"configured": bool(cfg)}, session=s)
+        return get_gitlab_scm(installation_id, principal)
+
+    @app.get("/api/installations/{installation_id}/gitlab-scm/projects")
+    def gitlab_projects(installation_id: int, search: str = "", principal: Principal = Depends(auth)):
+        require_manager(principal, installation_id)
+        try:
+            projects = _scm(_scm_cfg(installation_id, principal)).projects(search)
+        except GitlabSCMError as e:
+            raise HTTPException(status_code=502, detail=str(e)) from None
+        with db.session() as s:
+            linked = set(s.scalars(select(Repository.id).where(Repository.installation_id == installation_id,
+                                                               Repository.provider == "gitlab", Repository.active)))
+        return [{**p, "linked": gitlab_repo_id(installation_id, p["id"]) in linked} for p in projects]
+
+    @app.post("/api/installations/{installation_id}/gitlab-scm/projects", status_code=201)
+    def link_gitlab_project(installation_id: int, data: GitlabProjectIn, principal: Principal = Depends(auth)):
+        """Añade un proyecto de GitLab: se escanea en cada push a la rama principal y en cada MR."""
+        require_manager(principal, installation_id)
+        cfg = _scm_cfg(installation_id, principal)
+        scm = _scm(cfg)
+        try:
+            project = scm.project(data.project_id)   # el token tiene que verlo: no se añaden proyectos ajenos
+        except GitlabSCMError as e:
+            raise HTTPException(status_code=404, detail=f"proyecto no accesible con el token: {e}") from None
+        rid = gitlab_repo_id(installation_id, project["id"])
+        with db.session() as s, s.begin():
+            visible_installation(s, principal, installation_id)
+            repo = s.get(Repository, rid)
+            already = repo is not None and repo.active
+            if repo is None:
+                repo = Repository(id=rid, installation_id=installation_id, provider="gitlab", full_name="")
+                s.add(repo)
+            repo.full_name, repo.default_branch = project["path"][:300], project["default_branch"][:200]
+            repo.private, repo.active = project["private"], True
+            db.audit(installation_id, principal.login, "gitlab_scm.project_added", project["path"], session=s)
+        if already:   # ya estaba añadido: no se crea otro webhook
+            return {"repository_id": rid, "path": project["path"], "webhook": "existing"}
+        hook = scm.create_hook(project["id"], _gitlab_hook_url(installation_id), cfg["webhook_secret"])
+        return {"repository_id": rid, "path": project["path"], "webhook": "created" if hook else "manual"}
+
+    @app.delete("/api/installations/{installation_id}/gitlab-scm/projects/{repository_id}", status_code=204)
+    def unlink_gitlab_project(installation_id: int, repository_id: int, principal: Principal = Depends(auth)):
+        require_manager(principal, installation_id)
+        with db.session() as s, s.begin():
+            repo = s.get(Repository, repository_id)
+            if repo is None or repo.installation_id != installation_id or repo.provider != "gitlab":
+                raise HTTPException(status_code=404, detail="repositorio no encontrado")
+            repo.active = False
+            db.audit(installation_id, principal.login, "gitlab_scm.project_removed", repo.full_name, session=s)
+        return Response(status_code=204)
+
+    @app.post("/webhooks/gitlab/{installation_id}")
+    async def gitlab_webhook(installation_id: int, request: Request, x_gitlab_event: str = Header(default=""),
+                             x_gitlab_token: str = Header(default="")):
+        body = await request.body()
+        if len(body) > MAX_WEBHOOK_BYTES:
+            raise HTTPException(status_code=413, detail="payload demasiado grande")
+        with db.session() as s:
+            inst = s.get(Installation, installation_id)
+            secret = (unseal(db.cipher, inst.gitlab_scm) or {}).get("webhook_secret", "") if inst else ""
+        # Mismo error con instalación inexistente o secreto incorrecto: no se revela qué organizaciones existen.
+        if not secret or not x_gitlab_token or not hmac.compare_digest(secret, x_gitlab_token):
+            raise HTTPException(status_code=401, detail="token no válido")
+        try:
+            payload = json.loads(body)
+        except json.JSONDecodeError:
+            raise HTTPException(status_code=400, detail="JSON no válido") from None
+        with db.session() as s, s.begin():
+            outcome = handle_gitlab_event(s, installation_id, x_gitlab_event, payload)
+        log.info("webhook gitlab %s %s -> %s", installation_id, x_gitlab_event, outcome)
+        return outcome
 
     # -- configuración de SSO (OIDC) por organización ---------------------------------------------
 

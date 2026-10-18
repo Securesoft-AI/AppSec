@@ -121,6 +121,23 @@ solicitud desde su pestaña Pentest y, cuando el informe está entregado, lo des
 Quitar un login de `STAFF_LOGINS` le retira el acceso en su siguiente petición. En la demo, el usuario `user`
 ve la vista Equipo solo con los pentests de la organización de ejemplo.
 
+## 3e'. Repositorios de GitLab
+
+Además de GitHub, cada organización puede escanear proyectos de GitLab (gitlab.com o una instancia propia) desde
+*Integraciones → GitLab: escanear repositorios*:
+
+1. Un administrador de la organización pega la URL de GitLab y un token de acceso con permiso `api` (personal, de
+   grupo o de proyecto). El token y el secreto del webhook se guardan cifrados.
+2. Elige los proyectos. Al añadir uno se crea su webhook (eventos Push y Merge request) apuntando a
+   `https://TU-DOMINIO/webhooks/gitlab/<organización>` con un secreto propio. Si el token no es Maintainer, el panel
+   muestra la URL y el secreto para crearlo a mano.
+3. Push a la rama por defecto → escaneo completo. Merge request abierta o con commits nuevos → escaneo solo de los
+   ficheros cambiados, un comentario en la MR (se actualiza, no se duplica) y el estado `appsec-ai` en el commit.
+
+El clonado es igual que en GitHub (un solo commit, sin hooks, LFS ni enlaces simbólicos, token fuera de los
+argumentos) y solo hacia hosts públicos, salvo `EGRESS_ALLOW_PRIVATE=1`. Los PR con correcciones automáticas
+siguen siendo solo de GitHub.
+
 ## 3e. Red teaming de endpoints con IA (RF-2.7)
 
 El servicio de Seguridad de IA incluye lanzar ataques reales contra un endpoint con LLM ya desplegado del

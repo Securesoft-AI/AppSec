@@ -51,6 +51,8 @@ class Installation(Base):
     bitbucket_config: Mapped[dict] = mapped_column(JSON, default=dict)
     # SSO OIDC: {issuer, client_id, client_secret, domains} (cifrado; vacío = sin SSO).
     oidc_config: Mapped[dict] = mapped_column(JSON, default=dict)
+    # GitLab como plataforma de código (base_url, token y secreto del webhook), cifrado.
+    gitlab_scm: Mapped[dict] = mapped_column(JSON, default=dict)
     subscription_status: Mapped[str] = mapped_column(String(30), default="")
     usage_period: Mapped[str] = mapped_column(String(7), default="")  # AAAA-MM
     ai_requests_used: Mapped[int] = mapped_column(Integer, default=0)
@@ -66,6 +68,8 @@ class Repository(Base):
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)  # id de repositorio de GitHub
     installation_id: Mapped[int] = mapped_column(ForeignKey("installations.id", ondelete="CASCADE"), index=True)
     full_name: Mapped[str] = mapped_column(String(300), index=True)
+    # "github" o "gitlab". Los de GitLab tienen id negativo (ver service/gitlab_scm.repo_id).
+    provider: Mapped[str] = mapped_column(String(20), default="github")
     default_branch: Mapped[str] = mapped_column(String(200), default="main")
     private: Mapped[bool] = mapped_column(default=True)
     active: Mapped[bool] = mapped_column(default=True)
