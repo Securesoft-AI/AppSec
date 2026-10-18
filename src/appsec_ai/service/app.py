@@ -320,14 +320,15 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
             raise HTTPException(status_code=400, detail="login no válido; vuelve a intentarlo")
         try:
             token = github.exchange_code(settings.github_client_id, settings.github_client_secret, code, callback_url)
-            user, installations = github.user_with_installations(token)
+            user, installations, managed = github.user_with_installations(token)
         except GitHubError:
             log.exception("fallo en el login con GitHub")
             raise HTTPException(status_code=502, detail="GitHub no ha validado el login") from None
         resp = RedirectResponse("/app", status_code=302)
         resp.delete_cookie(STATE_COOKIE)
         staff = "all" if user["login"].lower() in settings.staff_logins else ""
-        resp.set_cookie(SESSION_COOKIE, encode_session(settings.session_secret, user, installations, staff),
+        resp.set_cookie(SESSION_COOKIE, encode_session(settings.session_secret, user, installations, staff,
+                                                       managed),
                         max_age=SESSION_TTL, httponly=True, secure=secure_cookies, samesite="lax")
         log.info("login de %s con %d instalaciones", user["login"], len(installations))
         db.audit(None, user["login"], "auth.login", detail={"mode": "github", "installations": len(installations)},
@@ -432,7 +433,8 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
             raise HTTPException(status_code=401, detail="usuario o contraseña incorrectos")
         resp = JSONResponse({"status": "ok"})
         resp.set_cookie(SESSION_COOKIE, encode_session(settings.session_secret, {"id": 0, "login": "demo"},
-                                                       [demo.DEMO_INSTALLATION_ID], staff="own"),
+                                                       [demo.DEMO_INSTALLATION_ID], staff="own",
+                                                       managed=[demo.DEMO_INSTALLATION_ID]),
                         max_age=SESSION_TTL, httponly=True, secure=secure_cookies, samesite="lax")
         db.audit(demo.DEMO_INSTALLATION_ID, "demo", "auth.login", detail={"mode": "demo"}, ip=ip)
         return resp
@@ -452,7 +454,8 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
             rows = s.scalars(q).all()
             return {"login": principal.login, "admin": principal.admin, "staff": bool(principal.admin or principal.staff),
                     "installations": [{"id": r.id, "account": r.account_login, "plan": r.plan,
-                                       "language": r.language or settings.language} for r in rows]}
+                                       "language": r.language or settings.language,
+                                       "manage": principal.can_manage(r.id)} for r in rows]}
 
     @app.get("/healthz")
     def healthz():
@@ -957,6 +960,7 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
 
     @app.patch("/api/installations/{installation_id}/notifications")
     def set_notifications(installation_id: int, data: NotificationsIn, principal: Principal = Depends(auth)):
+        require_manager(principal, installation_id)
         url = data.slack_webhook.strip()
         if url and not url.startswith("https://hooks.slack.com/"):
             raise HTTPException(status_code=422, detail="el webhook debe empezar por https://hooks.slack.com/")
@@ -969,6 +973,7 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
 
     @app.post("/api/installations/{installation_id}/notifications/test")
     def test_notifications(installation_id: int, principal: Principal = Depends(auth)):
+        require_manager(principal, installation_id)
         with db.session() as s:
             inst = visible_installation(s, principal, installation_id)
             url = _slack_url(inst)
@@ -1009,6 +1014,7 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
 
     @app.patch("/api/installations/{installation_id}/jira")
     def set_jira(installation_id: int, data: JiraConfigIn, principal: Principal = Depends(auth)):
+        require_manager(principal, installation_id)
         base = data.base_url.strip().rstrip("/")
         filled = [bool(base), bool(data.email.strip()), bool(data.token.strip()), bool(data.project_key.strip())]
         if any(filled) and not all(filled):
@@ -1026,6 +1032,7 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
 
     @app.post("/api/installations/{installation_id}/jira/test")
     def test_jira(installation_id: int, principal: Principal = Depends(auth)):
+        require_manager(principal, installation_id)
         with db.session() as s:
             cfg = _cfg(visible_installation(s, principal, installation_id), "jira")
         if not cfg:
@@ -1036,6 +1043,7 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
 
     @app.patch("/api/installations/{installation_id}/gitlab")
     def set_gitlab(installation_id: int, data: GitlabConfigIn, principal: Principal = Depends(auth)):
+        require_manager(principal, installation_id)
         base = (data.base_url.strip().rstrip("/") or "https://gitlab.com")
         filled = [bool(data.token.strip()), bool(data.project.strip())]
         if any(filled) and not all(filled):
@@ -1053,6 +1061,7 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
 
     @app.post("/api/installations/{installation_id}/gitlab/test")
     def test_gitlab(installation_id: int, principal: Principal = Depends(auth)):
+        require_manager(principal, installation_id)
         with db.session() as s:
             cfg = _cfg(visible_installation(s, principal, installation_id), "gitlab")
         if not cfg:
@@ -1093,6 +1102,7 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
 
     @app.patch("/api/installations/{installation_id}/bitbucket")
     def set_bitbucket(installation_id: int, data: BitbucketConfigIn, principal: Principal = Depends(auth)):
+        require_manager(principal, installation_id)
         vals = [data.workspace.strip(), data.repo.strip(), data.username.strip(), data.app_password.strip()]
         if any(v and not re.fullmatch(r"[A-Za-z0-9_.-]+", v) or v in (".", "..") for v in vals[:2]):
             raise HTTPException(status_code=422, detail="workspace y repo solo admiten letras, números, '.', '_' y '-'")
@@ -1109,6 +1119,7 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
 
     @app.post("/api/installations/{installation_id}/bitbucket/test")
     def test_bitbucket(installation_id: int, principal: Principal = Depends(auth)):
+        require_manager(principal, installation_id)
         with db.session() as s:
             cfg = _cfg(visible_installation(s, principal, installation_id), "bitbucket")
         if not cfg:
@@ -1137,6 +1148,7 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
 
     @app.patch("/api/installations/{installation_id}/sso")
     def set_sso(installation_id: int, data: SsoConfigIn, principal: Principal = Depends(auth)):
+        require_manager(principal, installation_id)
         issuer = data.issuer.strip().rstrip("/")
         domains = sorted({d.strip().lower() for d in data.domains if d.strip() and "." in d})
         filled = [bool(issuer), bool(data.client_id.strip()), bool(data.client_secret.strip()), bool(domains)]
@@ -1160,6 +1172,7 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
 
     @app.post("/api/installations/{installation_id}/sso/verify")
     def verify_sso_domain(installation_id: int, data: SsoVerifyIn, principal: Principal = Depends(auth)):
+        require_manager(principal, installation_id)
         """Verifica por DNS TXT que el dominio es de la organización antes de usarlo para el login SSO.
 
         Sin esto, cualquiera podría reclamar el dominio de otra empresa y mandar a sus empleados a su IdP.
@@ -1186,6 +1199,13 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
             return _sso_public(installation_id, cfg)
 
     # -- planes y facturación (RF-4.5) ------------------------------------------------------------
+
+    def require_manager(principal: Principal, installation_id: int):
+        """Ajustes sensibles (SSO, integraciones, notificaciones): solo quien administra la organización."""
+        if not principal.can_see(installation_id):
+            raise HTTPException(status_code=404, detail="instalación no encontrada")
+        if not principal.can_manage(installation_id):
+            raise HTTPException(status_code=403, detail="solo los administradores de la organización pueden cambiar esto")
 
     def visible_installation(s, principal: Principal, installation_id: int) -> Installation:
         inst = s.get(Installation, installation_id) if principal.can_see(installation_id) else None

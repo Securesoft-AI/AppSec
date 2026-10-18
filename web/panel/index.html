@@ -114,6 +114,7 @@ tr.link { cursor: pointer; } tr.link:hover td { background: var(--accent-soft); 
 .toolbar h2 { margin: 0 auto 0 0; }
 .notice { padding: 10px 12px; border-radius: 8px; background: var(--warn-soft); color: var(--ink); margin: 0 0 12px; }
 .notice.ok { background: var(--ok-soft); }
+fieldset.plain { border: 0; margin: 0; padding: 0; min-width: 0; }
 .checks { display: flex; gap: 8px 16px; flex-wrap: wrap; margin: 8px 0 12px; }
 .checks label { display: inline-flex; gap: 6px; align-items: center; }
 .form { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
@@ -236,7 +237,8 @@ const I18N = {
     sso_hint: "Deja que tu equipo entre con vuestro proveedor de identidad (Okta, Entra ID, Google…). Los usuarios con un email de los dominios permitidos entran sin GitHub.",
     sso_issuer: "Issuer (https://…)", sso_client: "Client ID", sso_secret: "Client secret", sso_domains: "Dominios permitidos (separados por comas)",
     sso_connected: "SSO conectado ({p}).", sso_none: "SSO no está configurado.", sso_redirect: "URL de redirección (para el proveedor): {u}",
-    sso_pending: "SSO configurado: falta verificar un dominio.", sso_domain_ok: "{d} verificado",
+    sso_pending: "SSO configurado: falta verificar un dominio.",
+    int_readonly: "Solo los administradores de la organización en GitHub pueden cambiar las integraciones y el SSO. Pídeselo a uno de ellos.", sso_domain_ok: "{d} verificado",
     sso_domain_todo: "Para usar {d}, añade este registro TXT en su DNS y pulsa Verificar:", sso_verify: "Verificar",
     sso_verified_ok: "{d} verificado: ya se puede entrar con SSO.", "a.sso.domain_verified": "Dominio SSO verificado",
     "a.bitbucket.changed": "Bitbucket cambiado", "a.bitbucket.issue_created": "Incidencia de Bitbucket creada",
@@ -324,7 +326,8 @@ const I18N = {
     sso_hint: "Let your team sign in with your identity provider (Okta, Entra ID, Google…). Users with an email in the allowed domains sign in without GitHub.",
     sso_issuer: "Issuer (https://…)", sso_client: "Client ID", sso_secret: "Client secret", sso_domains: "Allowed domains (comma-separated)",
     sso_connected: "SSO connected ({p}).", sso_none: "SSO not configured.", sso_redirect: "Redirect URL (for the provider): {u}",
-    sso_pending: "SSO configured: a domain still needs verifying.", sso_domain_ok: "{d} verified",
+    sso_pending: "SSO configured: a domain still needs verifying.",
+    int_readonly: "Only organization admins on GitHub can change integrations and SSO. Ask one of them.", sso_domain_ok: "{d} verified",
     sso_domain_todo: "To use {d}, add this TXT record to its DNS and click Verify:", sso_verify: "Verify",
     sso_verified_ok: "{d} verified: SSO sign-in is now enabled.", "a.sso.domain_verified": "SSO domain verified",
     "a.bitbucket.changed": "Bitbucket changed", "a.bitbucket.issue_created": "Bitbucket issue created",
@@ -1008,9 +1011,13 @@ function viewIntegrations() {
        el("button", { class: "btn", type: "button", onclick: () => save(true) }, t("notif_clear"))]);
   }
 
+  // Solo quien administra la organización en GitHub cambia estos ajustes; el resto los ve sin poder editarlos.
+  const inst = state.me.installations.find((x) => String(x.id) === instId()) || {};
+  const cards = [slackCard(), destCard("jira"), destCard("gitlab"), bitbucketCard(), ssoCard()];
   $("main").replaceChildren(
-    el("section", { class: "card" }, el("h2", {}, t("int_title")), el("p", { class: "muted" }, t("int_intro"))),
-    slackCard(), destCard("jira"), destCard("gitlab"), bitbucketCard(), ssoCard());
+    el("section", { class: "card" }, el("h2", {}, t("int_title")), el("p", { class: "muted" }, t("int_intro")),
+      ...(inst.manage ? [] : [el("p", { class: "notice" }, t("int_readonly"))])),
+    inst.manage ? el("div", {}, ...cards) : el("fieldset", { class: "plain", disabled: true }, ...cards));
 
   function ssoCard() {
     const msg = notice();

@@ -37,10 +37,20 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("worker", help="Arranca un worker que procesa la cola de escaneos")
     mg = sub.add_parser("migrate", help="Actualiza el esquema de la base de datos (la API y el worker lo hacen al arrancar)")
     mg.add_argument("--new", metavar="MENSAJE", help="Genera la migración de los cambios hechos en los modelos")
+    dr = sub.add_parser("doctor", help="Comprueba la configuración antes de desplegar")
+    dr.add_argument("--online", action="store_true",
+                    help="Prueba también las credenciales contra GitHub, Anthropic y Stripe (solo lectura)")
 
     args = p.parse_args(argv)
     if args.cmd in ("serve", "worker"):
         return run_service(args)
+    if args.cmd == "doctor":
+        from appsec_ai.service import doctor
+        from appsec_ai.service.config import get_settings
+
+        checks = doctor.run(get_settings(), online=args.online)
+        print(doctor.render(checks))
+        return 1 if any(c.status == doctor.FAIL for c in checks) else 0
     if args.cmd == "migrate":
         from appsec_ai.service.config import get_settings
         from appsec_ai.service.db import Database

@@ -100,7 +100,7 @@ def ctx(tmp_path, monkeypatch):
     c = TestClient(create_app(settings, db), base_url=PUBLIC)
     with db.session() as s, s.begin():
         s.add(Installation(id=7, account_login="acme", trial_ends_at=utcnow() + dt.timedelta(days=5)))
-    c.cookies.set(SESSION_COOKIE, encode_session(settings.session_secret, {"id": 1, "login": "admin"}, [7]))
+    c.cookies.set(SESSION_COOKIE, encode_session(settings.session_secret, {"id": 1, "login": "admin"}, [7], managed=[7]))
     c.db, c.settings, c.idp = db, settings, idp
     return c
 
@@ -163,7 +163,8 @@ def test_unverified_domain_is_not_used_for_login(ctx, monkeypatch):
 def test_domain_cannot_be_claimed_by_two_organizations(ctx, monkeypatch):
     with ctx.db.session() as s, s.begin():
         s.add(Installation(id=8, account_login="atacante"))
-    ctx.cookies.set(SESSION_COOKIE, encode_session(ctx.settings.session_secret, {"id": 1, "login": "admin"}, [7, 8]))
+    ctx.cookies.set(SESSION_COOKIE, encode_session(ctx.settings.session_secret, {"id": 1, "login": "admin"}, [7, 8],
+                                                     managed=[7, 8]))
     ctx.patch("/api/installations/7/sso", headers=O, json=SSO)
     ctx.patch("/api/installations/8/sso", headers=O, json={**SSO, "issuer": "https://idp-atacante.example"})
     assert verify_domain(ctx, monkeypatch, 7).status_code == 200
