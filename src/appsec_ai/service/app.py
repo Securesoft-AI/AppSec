@@ -32,6 +32,7 @@ from appsec_ai.service import notify, ownership
 from appsec_ai.service import integrations
 from appsec_ai.service.jira import Jira
 from appsec_ai.service.gitlab import Gitlab
+from appsec_ai.service.bitbucket import Bitbucket
 from appsec_ai import redteam
 from appsec_ai.service.github import GitHubApp, GitHubError
 from appsec_ai.service import demo, plans
@@ -141,6 +142,14 @@ class GitlabConfigIn(BaseModel):
     base_url: str = Field(default="", max_length=300)
     token: str = Field(default="", max_length=500)
     project: str = Field(default="", max_length=200)   # id numérico o ruta "grupo/proyecto"
+    auto: bool = False
+
+
+class BitbucketConfigIn(BaseModel):
+    workspace: str = Field(default="", max_length=100)
+    repo: str = Field(default="", max_length=100)
+    username: str = Field(default="", max_length=100)
+    app_password: str = Field(default="", max_length=200)
     auto: bool = False
 
 
@@ -858,9 +867,13 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
 
     def _public(provider: str, cfg: dict) -> dict:
         """Estado de una integración sin el token (nunca se devuelve el secreto)."""
-        out = {"configured": bool(cfg), "base_url": cfg.get("base_url", ""), "auto": bool(cfg.get("auto"))}
-        out["project_key" if provider == "jira" else "project"] = cfg.get(
-            "project_key" if provider == "jira" else "project", "")
+        out = {"configured": bool(cfg), "auto": bool(cfg.get("auto"))}
+        if provider == "jira":
+            out.update(base_url=cfg.get("base_url", ""), project_key=cfg.get("project_key", ""))
+        elif provider == "gitlab":
+            out.update(base_url=cfg.get("base_url", ""), project=cfg.get("project", ""))
+        else:  # bitbucket
+            out.update(workspace=cfg.get("workspace", ""), repo=cfg.get("repo", ""))
         return out
 
     @app.get("/api/installations/{installation_id}/integrations")
@@ -869,7 +882,8 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
             inst = visible_installation(s, principal, installation_id)
             return {"slack": {"connected": bool((unseal(db.cipher, inst.slack_webhook) or {}).get("url"))},
                     "jira": _public("jira", _cfg(inst, "jira")),
-                    "gitlab": _public("gitlab", _cfg(inst, "gitlab"))}
+                    "gitlab": _public("gitlab", _cfg(inst, "gitlab")),
+                    "bitbucket": _public("bitbucket", _cfg(inst, "bitbucket"))}
 
     @app.patch("/api/installations/{installation_id}/jira")
     def set_jira(installation_id: int, data: JiraConfigIn, principal: Principal = Depends(auth)):
@@ -954,6 +968,34 @@ def create_app(settings: Settings | None = None, db: Database | None = None, git
     @app.post("/api/scans/{scan_id}/gitlab")
     def create_gitlab_issue(scan_id: int, data: IssueIn, principal: Principal = Depends(auth)):
         return _create_issue("gitlab", scan_id, data.fingerprint, principal)
+
+    @app.patch("/api/installations/{installation_id}/bitbucket")
+    def set_bitbucket(installation_id: int, data: BitbucketConfigIn, principal: Principal = Depends(auth)):
+        vals = [data.workspace.strip(), data.repo.strip(), data.username.strip(), data.app_password.strip()]
+        if any(vals) and not all(vals):
+            raise HTTPException(status_code=422, detail="faltan datos de Bitbucket (workspace, repo, usuario y app password)")
+        cfg = {"workspace": vals[0], "repo": vals[1], "username": vals[2], "app_password": vals[3],
+               "auto": data.auto} if all(vals) else {}
+        with db.session() as s, s.begin():
+            inst = visible_installation(s, principal, installation_id)
+            inst.bitbucket_config = seal(db.cipher, cfg) if cfg else {}
+            db.audit(installation_id, principal.login, "bitbucket.changed", f"{cfg.get('workspace', '')}/{cfg.get('repo', '')}".strip("/"),
+                     {"configured": bool(cfg), "auto": bool(cfg.get("auto"))}, session=s)
+            return _public("bitbucket", cfg)
+
+    @app.post("/api/installations/{installation_id}/bitbucket/test")
+    def test_bitbucket(installation_id: int, principal: Principal = Depends(auth)):
+        with db.session() as s:
+            cfg = _cfg(visible_installation(s, principal, installation_id), "bitbucket")
+        if not cfg:
+            raise HTTPException(status_code=409, detail="Bitbucket no está configurado")
+        if not Bitbucket(cfg["workspace"], cfg["repo"], cfg["username"], cfg["app_password"]).check():
+            raise HTTPException(status_code=502, detail="Bitbucket no aceptó las credenciales o el repositorio")
+        return {"ok": True}
+
+    @app.post("/api/scans/{scan_id}/bitbucket")
+    def create_bitbucket_issue(scan_id: int, data: IssueIn, principal: Principal = Depends(auth)):
+        return _create_issue("bitbucket", scan_id, data.fingerprint, principal)
 
     # -- planes y facturación (RF-4.5) ------------------------------------------------------------
 

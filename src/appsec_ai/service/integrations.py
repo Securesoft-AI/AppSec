@@ -8,12 +8,13 @@ from __future__ import annotations
 
 import logging
 
+from appsec_ai.service.bitbucket import Bitbucket, BitbucketError
 from appsec_ai.service.gitlab import Gitlab, GitlabError, finding_markdown
 from appsec_ai.service.jira import Jira, JiraError, finding_adf
 
 log = logging.getLogger("appsec_ai.integrations")
 
-PROVIDERS = ("jira", "gitlab")
+PROVIDERS = ("jira", "gitlab", "bitbucket")
 SERIOUS = ("critical", "high")       # severidades que se exportan automáticamente
 MAX_AUTO_PER_SCAN = 50               # tope para no inundar el tracker con un escaneo enorme
 
@@ -41,7 +42,10 @@ def create_issue(provider: str, cfg: dict, finding: dict, repo: str, lang: str) 
             client = Gitlab(cfg["base_url"], cfg["token"])
             return client.create_issue(cfg["project"], _summary(finding, repo),
                                        finding_markdown(finding, repo, lang), _labels(finding))
-    except (JiraError, GitlabError) as e:
+        if provider == "bitbucket":
+            client = Bitbucket(cfg["workspace"], cfg["repo"], cfg["username"], cfg["app_password"])
+            return client.create_issue(_summary(finding, repo), finding_markdown(finding, repo, lang))
+    except (JiraError, GitlabError, BitbucketError) as e:
         raise IntegrationError(str(e)) from None
     raise IntegrationError(f"destino desconocido: {provider}")
 

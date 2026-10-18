@@ -231,6 +231,10 @@ const I18N = {
     gl_title: "GitLab", gl_hint: "Crea incidencias en GitLab (gitlab.com o tu instalación). Necesitas la URL base, un token de acceso y el id o la ruta del proyecto.",
     gl_url: "URL base (https://gitlab.com)", gl_token: "Token de acceso", gl_project: "Proyecto (id o grupo/proyecto)",
     gl_create: "Crear incidencia en GitLab", gl_connected: "GitLab conectado ({p}).", gl_none: "GitLab no está conectado.",
+    "a.bitbucket.changed": "Bitbucket cambiado", "a.bitbucket.issue_created": "Incidencia de Bitbucket creada",
+    bb_title: "Bitbucket", bb_hint: "Crea incidencias en Bitbucket Cloud. Necesitas el workspace, el repositorio, tu usuario y un app password. Las incidencias deben estar activadas en el repositorio.",
+    bb_workspace: "Workspace", bb_repo: "Repositorio", bb_user: "Usuario", bb_pass: "App password",
+    bb_create: "Crear incidencia en Bitbucket", bb_connected: "Bitbucket conectado ({p}).", bb_none: "Bitbucket no está conectado.",
   },
   en: {
     logout: "Sign out", gh_lang: "GitHub language",
@@ -307,6 +311,10 @@ const I18N = {
     gl_title: "GitLab", gl_hint: "Create GitLab issues (gitlab.com or your own instance). You need the base URL, an access token and the project id or path.",
     gl_url: "Base URL (https://gitlab.com)", gl_token: "Access token", gl_project: "Project (id or group/project)",
     gl_create: "Create GitLab issue", gl_connected: "GitLab connected ({p}).", gl_none: "GitLab not connected.",
+    "a.bitbucket.changed": "Bitbucket changed", "a.bitbucket.issue_created": "Bitbucket issue created",
+    bb_title: "Bitbucket", bb_hint: "Create Bitbucket Cloud issues. You need the workspace, the repository, your username and an app password. Issues must be enabled on the repository.",
+    bb_workspace: "Workspace", bb_repo: "Repository", bb_user: "Username", bb_pass: "App password",
+    bb_create: "Create Bitbucket issue", bb_connected: "Bitbucket connected ({p}).", bb_none: "Bitbucket not connected.",
   },
 };
 let lang = (() => { try { return localStorage.getItem("lang") || (navigator.language || "es").slice(0, 2); } catch { return "es"; } })();
@@ -578,6 +586,7 @@ function issueButtons(scanId, fp) {
   const out = [];
   if (i.jira && i.jira.configured) out.push(mk("jira", t("jira_create")));
   if (i.gitlab && i.gitlab.configured) out.push(mk("gitlab", t("gl_create")));
+  if (i.bitbucket && i.bitbucket.configured) out.push(mk("bitbucket", t("bb_create")));
   return out;
 }
 
@@ -938,9 +947,39 @@ function viewIntegrations() {
        el("button", { class: "btn", type: "button", onclick: () => save(true) }, t("notif_clear"))]);
   }
 
+  function bitbucketCard() {
+    const cfg = i.bitbucket || {};
+    const msg = notice();
+    const f = { workspace: el("input", { maxlength: 100, placeholder: "mi-workspace" }),
+                repo: el("input", { maxlength: 100, placeholder: "mi-repo" }),
+                username: el("input", { maxlength: 100, autocomplete: "off" }),
+                app_password: el("input", { type: "password", maxlength: 200, autocomplete: "off" }) };
+    const pill = el("span", { class: "pill off" });
+    const auto = el("input", { type: "checkbox" });
+    const set = (c) => { const on = !!c.configured; pill.className = "pill " + (on ? "on" : "off");
+      pill.textContent = on ? t("bb_connected", { p: [c.workspace, c.repo].filter(Boolean).join("/") }) : t("bb_none");
+      f.workspace.value = c.workspace || ""; f.repo.value = c.repo || ""; f.username.value = ""; f.app_password.value = ""; auto.checked = !!c.auto; };
+    set(cfg);
+    const save = async (clear) => { try {
+        const body = clear ? { auto: false } : { auto: auto.checked, workspace: f.workspace.value, repo: f.repo.value,
+          username: f.username.value, app_password: f.app_password.value };
+        const r = await api(base("/bitbucket"), { method: "PATCH", body: JSON.stringify(body) });
+        i.bitbucket = r; set(r); show(msg, t("notif_saved")); }
+      catch (e) { show(msg, t("error") + e.message, false); } };
+    return card(t("bb_title"), t("bb_hint"), pill,
+      [msg, el("div", { class: "form" }, el("label", {}, t("bb_workspace"), f.workspace), el("label", {}, t("bb_repo"), f.repo),
+        el("label", {}, t("bb_user"), f.username), el("label", {}, t("bb_pass"), f.app_password)),
+       el("label", { class: "inline" }, auto, t("int_auto"))],
+      [el("button", { class: "btn primary", type: "button", onclick: () => save(false) }, t("notif_save")),
+       el("button", { class: "btn", type: "button", onclick: async () => {
+         try { await api(base("/bitbucket/test"), { method: "POST" }); show(msg, t("notif_tested")); }
+         catch (e) { show(msg, t("error") + e.message, false); } } }, t("notif_test")),
+       el("button", { class: "btn", type: "button", onclick: () => save(true) }, t("notif_clear"))]);
+  }
+
   $("main").replaceChildren(
     el("section", { class: "card" }, el("h2", {}, t("int_title")), el("p", { class: "muted" }, t("int_intro"))),
-    slackCard(), destCard("jira"), destCard("gitlab"));
+    slackCard(), destCard("jira"), destCard("gitlab"), bitbucketCard());
 }
 
 function auditCard() {
